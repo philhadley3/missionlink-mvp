@@ -4,8 +4,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://api.yourdomain.com/api/:path*" },
-    { "source": "/((?!api)(?!assets)(?!.*\\.).*)", "destination": "/" }
+    { "source": "/api/:path*", "destination": "https://missionlink-mvp.onrender.com/api/:path*" },
+    { "source": "/uploads/:path*", "destination": "https://missionlink-mvp.onrender.com/uploads/:path*" },
+    { "source": "/((?!api)(?!uploads)(?!assets)(?!.*\\.).*)", "destination": "/" }
   ],
   "headers": [
     {

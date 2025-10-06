@@ -8,17 +8,25 @@ export class HttpError extends Error {
   }
 }
 
+// Prefer new var, fall back to old, and default to /api for prod proxy
 export const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
-  import.meta.env.VITE_API_URL || // fallback if you used the old name
-  "";
+  "/api";
+
 
 // Join base + path safely; keep absolute URLs untouched
 function joinUrl(base, path) {
   if (/^https?:\/\//i.test(path)) return path;
-  if (!base) return path; // same-origin
-  const b = base.replace(/\/+$/, "");
-  return path.startsWith("/") ? b + path : `${b}/${path}`;
+  const b = (base || "").replace(/\/+$/, "");
+  const p = path || "";
+
+  // If both end/start with /api, drop one to avoid /api/api/…
+  if (b.endsWith("/api") && p.startsWith("/api")) {
+    return b + p.replace(/^\/api/, "");
+  }
+
+  if (!b) return p; // relative path (same-origin)
+  return p.startsWith("/") ? b + p : `${b}/${p}`;
 }
 
 // Usage: api("/api/me/profile", { method: "PUT", body: {...}, token });
@@ -41,7 +49,7 @@ export async function api(
 
   if (body !== undefined) {
     init.body = isForm
-      ? body // FormData, let the browser set Content-Type boundary
+      ? body // FormData; let the browser set Content-Type boundary
       : typeof body === "string"
         ? body
         : JSON.stringify(body);

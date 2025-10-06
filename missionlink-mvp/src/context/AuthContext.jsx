@@ -1,13 +1,11 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { api } from "../lib/api";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-
-  // Prefer .env, but HARD fallback prevents hitting :5173
-  const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:5001";
 
   useEffect(() => {
     const t = localStorage.getItem("token");
@@ -19,31 +17,26 @@ export function AuthProvider({ children }) {
   }, []);
 
   async function loginRequest(email, password) {
-  const url = `${API}/api/auth/login`;   // <-- /api/auth/login
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error(`Login failed: ${res.status} ${await res.text()}`);
-  const data = await res.json(); // { access_token, role }
-  // normalize to { token, user }
-  return { token: data.access_token, user: { role: data.role, email } };
-}
+    // Hits /api/auth/login (helper handles base + headers)
+    const data = await api("/api/auth/login", {
+      method: "POST",
+      body: { email, password },
+      credentials: "include",
+    });
+    const jwt = data?.access_token || data?.token;
+    return { token: jwt, user: { role: data?.role, email } };
+  }
 
   async function signupRequest(name, email, password) {
-  const url = `${API}/api/auth/register`; // <-- /api/auth/register
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password }),
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error(`Signup failed: ${res.status} ${await res.text()}`);
-  // your API returns { message }, so log the user in by calling loginRequest:
-  return loginRequest(email, password);
-}
+    // Hits /api/auth/register
+    await api("/api/auth/register", {
+      method: "POST",
+      body: { name, email, password },
+      credentials: "include",
+    });
+    // Immediately log them in
+    return loginRequest(email, password);
+  }
 
   const login = (jwt, userObj) => {
     setToken(jwt);

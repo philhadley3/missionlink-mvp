@@ -11,42 +11,60 @@ export default function Login() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
     setLoading(true);
-
     try {
-      const data = await loginRequest(email, password);
-      console.log("[Login] response ->", data);
-      // Expecting { token, user }
-      login(data.token, data.user);
-      navigate("/dashboard");
+      const { token, user } = await loginRequest(email.trim(), password);
+      login(token, user);               // persist to localStorage + context
+      navigate("/dashboard");           // adjust if your route differs
     } catch (err) {
-      setError(err.message || "Login failed");
+      // Prefer server message if our api.js threw HttpError with bodyText
+      let msg = err?.bodyText || err?.message || "Login failed";
+      try {
+        const j = JSON.parse(msg);
+        if (j?.message) msg = j.message;
+        if (j?.error) msg = `${j.error}${j.message ? `: ${j.message}` : ""}`;
+      } catch {}
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <div className="card" style={{ maxWidth: 400, margin: "2rem auto" }}>
       <h2 style={{ textAlign: "center" }}>Sign In</h2>
 
-      <form onSubmit={handleSubmit} className="form">
+      <form onSubmit={handleSubmit} className="form" noValidate>
         <div className="form-row">
           <label htmlFor="email">Email</label>
-          <input id="email" type="email" value={email}
-                 onChange={(e) => setEmail(e.target.value)} required />
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
         </div>
 
         <div className="form-row">
           <label htmlFor="password">Password</label>
-          <input id="password" type="password" value={password}
-                 onChange={(e) => setPassword(e.target.value)} required />
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
         </div>
 
-        {error && <div style={{ color: "salmon" }}>{error}</div>}
+        {error && <div style={{ color: "salmon", marginTop: 8 }}>{error}</div>}
 
         <button type="submit" className="btn" disabled={loading}>
           {loading ? "Signing In..." : "Sign In"}

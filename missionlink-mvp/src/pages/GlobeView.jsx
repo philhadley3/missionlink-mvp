@@ -5,65 +5,33 @@ import { feature as topoFeature } from "topojson-client";
 import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 import { useAuth } from "../context/AuthContext.jsx";
+import { api, API_BASE as API_BASE_ENV } from "../lib/api";
 
 countriesLib.registerLocale(enLocale);
 
 // AnchorsForLife palette
-const AFL_WATER = "#3673B7";  // ocean/base (your requested hex)
-const AFL_LIGHT = "#F4F4F4";  // land overlay
-const AFL_STROKE = "#808080"; // land borders
-const AFL_SKY = "#6699CC";    // atmosphere tint
-const API_BASE = import.meta.env.VITE_API_URL || "";
+const AFL_WATER = "#3673B7";
+const AFL_LIGHT = "#F4F4F4";
+const AFL_STROKE = "#808080";
+const AFL_SKY = "#6699CC";
+
+// Use shared base; default to /api so Vercel can proxy to Render
+const API_BASE = API_BASE_ENV || "/api";
 
 function toBackendUrl(url) {
   if (!url) return "";
-  // If it already starts with http, leave it
-  if (/^https?:\/\//i.test(url)) return url;
-  // Otherwise, prepend backend base
+  if (/^https?:\/\//i.test(url)) return url; // already absolute
   const path = url.startsWith("/") ? url : `/${url}`;
+  // e.g. /api/uploads/...
   return `${API_BASE}${path}`;
 }
-
-// ---------- Shared HTTP helpers (match dashboard approach) ----------
-class HttpError extends Error {
-  constructor(status, statusText, bodyText) {
-    super(`${status} ${statusText}`);
-    this.status = status;
-    this.body = bodyText;
-  }
-}
-
-async function rawApi(path, { method = "GET", body, token, isForm = false } = {}) {
-  const base = import.meta.env.VITE_API_URL || "";
-  const headers = isForm ? {} : { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(base + path, {
-    method,
-    headers,
-    body: isForm ? body : body ? JSON.stringify(body) : undefined,
-    credentials: "include",
-  });
-
-  const ct = res.headers.get("content-type") || "";
-  const isJSON = ct.includes("application/json");
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new HttpError(res.status, res.statusText, txt);
-  }
-
-  return isJSON ? res.json() : res.text();
-}
-
-// -------------------------------------------------------------------
 
 export default function GlobeView() {
   const globeEl = useRef();
   const { token } = useAuth();
 
   const [countries, setCountries] = useState([]);
-  const [active, setActive] = useState(null); // { name, iso2, loading, error, missionaries: [] }
+  const [active, setActive] = useState(null); // { name, iso2, loading, error, missionaries, reports }
   const [hovered, setHovered] = useState(null);
   const [activeId, setActiveId] = useState(null);
 
@@ -75,13 +43,13 @@ export default function GlobeView() {
   async function refreshSessionOnce() {
     if (!refreshInFlight.current) {
       refreshInFlight.current = (async () => {
-        const resp = await rawApi("/api/auth/refresh", { method: "POST" });
+        const resp = await api("/api/auth/refresh", { method: "POST" });
         const newToken =
           resp && typeof resp === "object" && (resp.access_token || resp.token)
             ? (resp.access_token || resp.token)
             : null;
         if (newToken) setAuthToken(newToken);
-        return newToken; // ok if null (cookie-only sessions)
+        return newToken;
       })().finally(() => {
         refreshInFlight.current = null;
       });
@@ -91,11 +59,11 @@ export default function GlobeView() {
 
   async function callApi(path, opts = {}) {
     try {
-      return await rawApi(path, { ...opts, token: authToken });
+      return await api(path, { ...opts, token: authToken });
     } catch (err) {
       if (err && [401, 403, 419].includes(err.status)) {
         const newTok = await refreshSessionOnce();
-        return await rawApi(path, { ...opts, token: newTok || authToken });
+        return await api(path, { ...opts, token: newTok || authToken });
       }
       throw err;
     }
@@ -108,7 +76,6 @@ export default function GlobeView() {
       .then((topo) => {
         const geo = topoFeature(topo, topo.objects.countries);
         const feats = (geo.features || []).filter((f) => f && f.geometry);
-        console.log(`[Globe] 110m polygons loaded: ${feats.length}`);
         setCountries(feats);
       })
       .catch((e) => console.error("[Globe] TopoJSON load FAILED:", e));
@@ -116,12 +83,6 @@ export default function GlobeView() {
 
   const polygonsData = useMemo(() => countries, [countries]);
 
-  // Debug: log active state changes
-  useEffect(() => {
-    console.log("active state changed:", active);
-  }, [active]);
-
-  // Hover cursor feedback
   useEffect(() => {
     document.body.style.cursor = hovered ? "pointer" : "default";
     return () => { document.body.style.cursor = "default"; };
@@ -137,8 +98,8 @@ export default function GlobeView() {
     return code;
   }
 
-  // ---------- Contact detail extractors ----------
-  // Ensure website links work even if API returns "example.org"
+  // ---------- Contact helpers ----------
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
   function cleanUrl(u) {
     if (!u) return null;
     const s = String(u).trim();
@@ -157,14 +118,9 @@ export default function GlobeView() {
         .replace(/\/+$/, "");
     }
   }
-
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-
-  // Deep scan for emails anywhere in the object (prefers keys that include "email")
   function deepFindEmail(obj, maxDepth = 6) {
     const seen = new WeakSet();
     let best = null;
-
     function visit(node, depth, keyHint = "") {
       if (node == null || depth > maxDepth) return;
       if (typeof node === "string") {
@@ -177,188 +133,102 @@ export default function GlobeView() {
       if (typeof node !== "object") return;
       if (seen.has(node)) return;
       seen.add(node);
-
-      if (Array.isArray(node)) {
-        for (const v of node) visit(v, depth + 1, keyHint);
-        return;
-      }
-      for (const k of Object.keys(node)) {
-        visit(node[k], depth + 1, k);
-      }
+      if (Array.isArray(node)) return void node.forEach((v) => visit(v, depth + 1, keyHint));
+      for (const k of Object.keys(node)) visit(node[k], depth + 1, k);
     }
-
     visit(obj, 0);
     return best;
   }
-
   function extractEmail(m) {
-    // fast-path candidates
     const candidates = [
       m?.email, m?.contact_email, m?.preferred_email, m?.primary_email,
       m?.user?.email, m?.profile?.email, m?.missionary?.email,
       ...(Array.isArray(m?.emails) ? m.emails.map(e => (typeof e === "string" ? e : e?.address || e?.email)) : []),
     ];
-    for (const v of candidates) {
-      if (typeof v === "string" && EMAIL_RE.test(v.trim())) return v.trim();
-    }
-    // deep fallback
+    for (const v of candidates) if (typeof v === "string" && EMAIL_RE.test(v.trim())) return v.trim();
     return deepFindEmail(m);
   }
-
   function extractWebsite(m) {
     const candidates = [m?.website, m?.url, m?.link, m?.profile?.website, m?.missionary?.website];
-    for (const v of candidates) {
-      if (typeof v === "string" && v.trim()) return cleanUrl(v);
-    }
-    // deep fallback for common keys
-    const stack = [m];
-    const seen = new WeakSet();
+    for (const v of candidates) if (typeof v === "string" && v.trim()) return cleanUrl(v);
+    const stack = [m], seen = new WeakSet();
     while (stack.length) {
       const cur = stack.pop();
       if (!cur || typeof cur !== "object" || seen.has(cur)) continue;
       seen.add(cur);
       for (const [k, v] of Object.entries(cur)) {
-        if (typeof v === "string" && v.trim() && /site|url|link|web/i.test(k)) {
-          return cleanUrl(v);
-        }
+        if (typeof v === "string" && v.trim() && /site|url|link|web/i.test(k)) return cleanUrl(v);
         if (v && typeof v === "object") stack.push(v);
       }
     }
     return null;
   }
-  // -----------------------------------------------
+  // ------------------------------------
 
-  // -------- Hydration for contact details by ID --------
+  // (Optional) detail hydration cache (left as-is; not critical to API base fix)
   const [hydrating, setHydrating] = useState(false);
   const detailCacheRef = useRef(new Map());
-
   function getIds(m) {
     const missionaryId = m?.missionary_id ?? m?.id ?? m?.missionary?.id ?? null;
     const userId = m?.user_id ?? m?.user?.id ?? null;
-    return {
-      missionaryId: missionaryId != null ? String(missionaryId) : null,
-      userId: userId != null ? String(userId) : null,
-    };
+    return { missionaryId: missionaryId != null ? String(missionaryId) : null, userId: userId != null ? String(userId) : null };
   }
-
   async function fetchContactDetail(m) {
     const { missionaryId, userId } = getIds(m);
     const cacheKey = missionaryId ? `m:${missionaryId}` : userId ? `u:${userId}` : null;
-    if (cacheKey && detailCacheRef.current.has(cacheKey)) {
-      return detailCacheRef.current.get(cacheKey);
-    }
+    if (cacheKey && detailCacheRef.current.has(cacheKey)) return detailCacheRef.current.get(cacheKey);
     let detail = null;
     try {
-      if (missionaryId) {
-        // adjust if your backend differs
-        detail = await callApi(`/api/missionaries/${missionaryId}`);
-      } else if (userId) {
-        detail = await callApi(`/api/users/${userId}`);
-      }
-    } catch {
-      // ignore; detail stays null
-    }
+      if (missionaryId) detail = await callApi(`/api/missionaries/${missionaryId}`);
+      else if (userId) detail = await callApi(`/api/users/${userId}`);
+    } catch { /* ignore */ }
     if (cacheKey) detailCacheRef.current.set(cacheKey, detail);
     return detail;
   }
 
-  async function hydrateMissionaries(list) {
-    const result = [...list];
-    // Only hydrate items that don't already have an email
-    const targets = list
-      .map((m, i) => ({ m, i }))
-      .filter(({ m }) => !extractEmail(m));
+  const handleCountryClick = async (feat) => {
+    const iso2 = getIso2FromFeature(feat);
+    const name = iso2 ? countriesLib.getName(iso2, "en") : "Unknown";
+    setActiveId(feat?.id ?? null);
+    setActive({ name, iso2, loading: true, error: null, missionaries: [], reports: [] });
 
-    if (targets.length === 0) return result;
+    if (!iso2) {
+      setActive({ name, iso2: null, loading: false, error: "Unknown country code for this polygon.", missionaries: [], reports: [] });
+      return;
+    }
 
-    setHydrating(true);
-    const limit = 4;
-    let idx = 0;
+    try {
+      const [missionsRes, reportsRes] = await Promise.allSettled([
+        callApi(`/api/countries/${iso2}/missionaries`),
+        callApi(`/api/countries/${iso2}/reports`)
+      ]);
 
-    async function worker() {
-      while (idx < targets.length) {
-        const t = targets[idx++];
-        const detail = await fetchContactDetail(t.m);
-        if (detail) {
-          const email = extractEmail(detail);
-          const website = extractWebsite(detail);
-          if (email || website) {
-            result[t.i] = {
-              ...t.m,
-              ...(email ? { email } : {}),
-              ...(website ? { website } : {}),
-              _detail: detail,
-            };
-          }
-        }
+      let missionaries = [];
+      if (missionsRes.status === "fulfilled") {
+        const data = missionsRes.value;
+        missionaries = Array.isArray(data) ? data : (data?.missionaries || []);
       }
+
+      let reports = [];
+      if (reportsRes.status === "fulfilled") {
+        const data = reportsRes.value;
+        reports = Array.isArray(data) ? data : (data?.reports || []);
+      }
+
+      setActive({ name, iso2, loading: false, error: null, missionaries, reports });
+    } catch (e) {
+      let msg = "Request failed.";
+      if (e instanceof TypeError) {
+        msg = "Network/CORS error. Verify API URL (VITE_API_BASE_URL), HTTPS, and CORS policy.";
+      } else if (e?.status) {
+        const body = (e.body || "").slice(0, 500);
+        msg = `${e.status} ${e.message}${body ? ` — ${body}` : ""}`;
+      } else if (e?.message) {
+        msg = e.message;
+      }
+      setActive({ name, iso2, loading: false, error: msg, missionaries: [], reports: [] });
     }
-
-    await Promise.all(Array(Math.min(limit, targets.length)).fill(0).map(worker));
-    setHydrating(false);
-    return result;
-  }
-  // -----------------------------------------------------
-
-const handleCountryClick = async (feat) => {
-  console.log("polygon clicked:", feat?.id, feat?.properties);
-  const iso2 = getIso2FromFeature(feat);
-  const name = iso2 ? countriesLib.getName(iso2, "en") : "Unknown";
-  setActiveId(feat?.id ?? null);
-  setActive({ name, iso2, loading: true, error: null, missionaries: [], reports: [] });
-
-  if (!iso2) {
-    setActive({
-      name,
-      iso2: null,
-      loading: false,
-      error: "Unknown country code for this polygon.",
-      missionaries: [],
-      reports: []
-    });
-    return;
-  }
-
-  try {
-    // Fetch both in parallel
-    const [missionsRes, reportsRes] = await Promise.allSettled([
-      callApi(`/api/countries/${iso2}/missionaries`),
-      callApi(`/api/countries/${iso2}/reports`)
-    ]);
-
-    let missionaries = [];
-    if (missionsRes.status === "fulfilled") {
-      const data = missionsRes.value;
-      missionaries = Array.isArray(data) ? data : (data?.missionaries || []);
-    }
-
-    let reports = [];
-    if (reportsRes.status === "fulfilled") {
-      const data = reportsRes.value;
-      reports = Array.isArray(data) ? data : (data?.reports || []);
-    }
-
-    setActive({
-      name,
-      iso2,
-      loading: false,
-      error: null,
-      missionaries,
-      reports
-    });
-  } catch (e) {
-    let msg = "Request failed.";
-    if (e instanceof TypeError) {
-      msg = "Network/CORS error. Verify API URL (VITE_API_URL), HTTPS, and CORS policy.";
-    } else if (e?.status) {
-      const body = (e.body || "").slice(0, 500);
-      msg = `${e.status} ${e.message}${body ? ` — ${body}` : ""}`;
-    } else if (e?.message) {
-      msg = e.message;
-    }
-    setActive({ name, iso2, loading: false, error: msg, missionaries: [], reports: [] });
-  }
-};
+  };
 
   return (
     <div
@@ -370,7 +240,7 @@ const handleCountryClick = async (feat) => {
         minHeight: 400
       }}
     >
-      {/* Globe column (clipped, so canvas can't spill over the sidebar) */}
+      {/* Globe */}
       <div
         style={{
           display: "flex",
@@ -385,7 +255,7 @@ const handleCountryClick = async (feat) => {
       >
         <Globe
           ref={globeEl}
-          globeImageUrl="/textures/blue.png" // #3673B7
+          globeImageUrl="/textures/blue.png"
           backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
           rendererConfig={{ antialias: true, alpha: true }}
           width={undefined}
@@ -395,10 +265,10 @@ const handleCountryClick = async (feat) => {
           polygonAltitude={(d) => (d === hovered || d?.id === activeId ? 0.02 : 0.01)}
           polygonCapColor={(d) =>
             d === hovered || d?.id === activeId
-              ? "rgb(182, 152, 98)"          // subtle lift on hover/active
-              : "rgba(244,244,244,0.80)"     // light grey land
+              ? "rgb(182, 152, 98)"
+              : "rgba(244,244,244,0.80)"
           }
-          polygonSideColor={() => "rgba(0,0,0,0.15)"}        // subtle depth
+          polygonSideColor={() => "rgba(0,0,0,0.15)"}
           polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#FFFFFF")}
           polygonStrokeWidth={2.0}
           onPolygonHover={setHovered}
@@ -406,7 +276,7 @@ const handleCountryClick = async (feat) => {
         />
       </div>
 
-      {/* Sidebar column (above the globe, guaranteed) */}
+      {/* Sidebar */}
       <aside
         className="card"
         style={{
@@ -416,7 +286,7 @@ const handleCountryClick = async (feat) => {
           background: "#fff",
           color: "#222",
           minWidth: 380,
-          zIndex: 50,                 // ensure above canvas
+          zIndex: 50,
           position: "relative",
           boxShadow: "-8px 0 24px rgba(0,0,0,.08)"
         }}
@@ -437,7 +307,7 @@ const handleCountryClick = async (feat) => {
             {active.loading && <p className="muted">Loading missionaries…</p>}
             {active.error && <p style={{ color: "salmon" }}>{active.error}</p>}
 
-                        {!active.loading && !active.error && (
+            {!active.loading && !active.error && (
               <div style={{ display: "grid", gap: 8 }}>
                 {hydrating && <p className="muted">Fetching contact details…</p>}
 
@@ -527,21 +397,21 @@ const handleCountryClick = async (feat) => {
                           )}
 
                           {r.file_url && (
-  <div style={{ marginTop: 8 }}>
-    <a
-      href={toBackendUrl(r.file_url)}
-      target="_blank"
-      rel="noreferrer"
-      className="text-sm"
-      style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
-    >
-      {r.file_name || "Download attachment"}
-    </a>
-    {r.file_mime && (
-      <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
-    )}
-  </div>
-)}
+                            <div style={{ marginTop: 8 }}>
+                              <a
+                                href={toBackendUrl(r.file_url)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm"
+                                style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
+                              >
+                                {r.file_name || "Download attachment"}
+                              </a>
+                              {r.file_mime && (
+                                <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
+                              )}
+                            </div>
+                          )}
 
                           {Array.isArray(r.images) && r.images.length > 0 && (
                             <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>
