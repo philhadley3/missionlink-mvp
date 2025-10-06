@@ -6,3 +6,4 @@ flask-jwt-extended==4.6.0
 werkzeug==3.0.3
 gunicorn==22.0.0
 psycopg[binary]==3.2.10
+Pillow==10.4.0
