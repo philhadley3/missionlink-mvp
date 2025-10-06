@@ -16,6 +16,7 @@ import { useAuth } from "@/context/AuthContext.jsx";
 import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 countriesLib.registerLocale(enLocale);
+import { api, API_BASE } from "../lib/api";
 
 /**
  * Missionary Dashboard – API-backed version
@@ -55,37 +56,6 @@ function dataUrlToBlob(dataUrl) {
   const u8arr = new Uint8Array(n);
   while (n--) u8arr[n] = bstr.charCodeAt(n);
   return new Blob([u8arr], { type: mime });
-}
-
-class HttpError extends Error {
-  constructor(status, statusText, bodyText) {
-    super(`${status} ${statusText}`);
-    this.status = status;
-    this.body = bodyText;
-  }
-}
-
-async function api(path, { method = "GET", body, token, isForm = false } = {}) {
-  const base = import.meta.env.VITE_API_URL || "";
-  const headers = isForm ? {} : { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(base + path, {
-    method,
-    headers,
-    body: isForm ? body : body ? JSON.stringify(body) : undefined,
-    credentials: "include",
-  });
-
-  const ct = res.headers.get("content-type") || "";
-  const isJSON = ct.includes("application/json");
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new HttpError(res.status, res.statusText, txt);
-  }
-
-  return isJSON ? res.json() : res.text();
 }
 
 // --- UI bits -----------------------------------------------------------------
@@ -943,7 +913,7 @@ export default function MissionaryDashboard() {
         <Separator className="my-8" />
         <footer className="text-xs text-muted-foreground">
           <p>
-            <strong>Notes:</strong> Adjust API paths if your backend differs. Set <code>VITE_API_URL</code> in your env to point to your server when needed.
+            <strong>Notes:</strong> Adjust API paths if your backend differs. Set <code>VITE_API_BASE_URL</code> in your env to point to your server when needed. Current base: <code>{API_BASE || "(same-origin)"}</code>
           </p>
         </footer>
       </div>

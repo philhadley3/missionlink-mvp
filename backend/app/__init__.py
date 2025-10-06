@@ -4,6 +4,7 @@ from flask import Flask, send_from_directory, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import traceback
 
@@ -13,22 +14,39 @@ jwt = JWTManager()
 def create_app():
     app = Flask(__name__)
 
+    # Trust reverse proxy headers (X-Forwarded-Proto/Host) for correct URL scheme in prod
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # --- Core config ----------------------------------------------------------
+    # Secrets from environment (no hard-coding)
+    flask_env = os.getenv("FLASK_ENV", "development")
+
+    secret = os.getenv("FLASK_SECRET_KEY")
+    if not secret and flask_env == "production":
+        raise RuntimeError("FLASK_SECRET_KEY is required in production")
+    app.config["SECRET_KEY"] = secret or "dev-only-change-me"
+
+    jwt_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("JWT_SECRET")
+    if not jwt_secret and flask_env == "production":
+        raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
+    app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
+
+    # Database
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///missionlink.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'dev-secret-change-me')
 
-    # --- CORS for frontend at Vite (5173) ------------------------------------
-    # Allow your React dev server origins; credentials allowed for JWT/cookies.
-    FRONTEND_ORIGINS = [
+    # --- CORS for frontend (dev + optional prod origin) -----------------------
+    FRONTEND_ORIGINS = {
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-    ]
+    }
+    prod_origin = os.getenv("CORS_ORIGIN")
+    if prod_origin:
+        FRONTEND_ORIGINS.add(prod_origin)
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": FRONTEND_ORIGINS}},
+        resources={r"/api/*": {"origins": list(FRONTEND_ORIGINS)}},
         supports_credentials=True,
         allow_headers=["Content-Type", "Authorization"],
         expose_headers=["Content-Type", "Authorization"],
@@ -45,8 +63,7 @@ def create_app():
     with app.app_context():
         db.create_all()
 
-    # --- Static uploads (configurable/persistent) ------------------------------
-    # Default to ../uploads next to this app package; allow override via UPLOAD_DIR
+    # --- Static uploads (configurable/persistent) -----------------------------
     DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
     upload_dir = os.path.abspath(os.getenv('UPLOAD_DIR', DEFAULT_UPLOAD_DIR))
     os.makedirs(upload_dir, exist_ok=True)
@@ -55,15 +72,28 @@ def create_app():
     def uploads(filename):
         return send_from_directory(upload_dir, filename)
 
-    # Some clients preflight to /api/* with OPTIONS
+    # --- Health & preflight ---------------------------------------------------
+    @app.get("/healthz")
+    def healthz():
+        return {"status": "ok"}, 200
+
     @app.route("/api/<path:subpath>", methods=["OPTIONS"])
     def api_options(subpath):
         return make_response("", 204)
 
-    # Simple health check
     @app.route("/api/ping")
     def ping():
         return {"ok": True}
+
+    # --- Security headers -----------------------------------------------------
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        resp.headers["X-Frame-Options"] = "DENY"
+        if flask_env == "production":
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        return resp
 
     # --- JWT error handlers ---------------------------------------------------
     @jwt.unauthorized_loader
@@ -87,7 +117,6 @@ def create_app():
 
     # --- API routes -----------------------------------------------------------
     from .routes import api_bp
-    # All your application routes live under /api
     app.register_blueprint(api_bp, url_prefix='/api')
 
     return app
