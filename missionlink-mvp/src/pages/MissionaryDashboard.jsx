@@ -17,6 +17,7 @@ import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 countriesLib.registerLocale(enLocale);
 import { api, API_BASE } from "../lib/api";
+import { toBackendUrl } from "../lib/fileUrls"; // ✅ NEW
 
 /**
  * Missionary Dashboard – API-backed version
@@ -286,6 +287,14 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
     setForm({ country: "", title: "", content: "", images: [], pdf: null });
   }
 
+  // ✅ Helper: keep data URLs as-is, rewrite everything else to backend
+  function imgSrc(u) {
+    if (!u) return "";
+    const s = String(u);
+    if (/^data:/i.test(s)) return s;
+    return toBackendUrl(s);
+  }
+
   const canSaveReport = !!form.country && !!form.title?.trim();
 
   return (
@@ -449,7 +458,7 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
                           {r.images?.length > 0 && (
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-4">
                               {r.images.map((src, i) => (
-                                <img key={i} src={src} alt="report" className="w-full h-32 object-cover rounded-xl border" />
+                                <img key={i} src={imgSrc(src)} alt="report" className="w-full h-32 object-cover rounded-xl border" />
                               ))}
                             </div>
                           )}
@@ -457,7 +466,7 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
                           {r.file_url && (
                             <div className="mt-4">
                               <a
-                                href={r.file_url}
+                                href={toBackendUrl(r.file_url)} // ✅ fixed
                                 target="_blank"
                                 rel="noreferrer"
                                 className="inline-flex items-center gap-2 underline"
@@ -488,7 +497,7 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
                   {r.images?.length > 0 && (
                     <div className="flex gap-2 mt-2 overflow-x-auto">
                       {r.images.slice(0, 6).map((src, i) => (
-                        <img key={i} src={src} alt="thumb" className="w-20 h-16 object-cover rounded-lg border" />
+                        <img key={i} src={imgSrc(src)} alt="thumb" className="w-20 h-16 object-cover rounded-lg border" />
                       ))}
                       {r.images.length > 6 && (
                         <div className="w-20 h-16 grid place-items-center border rounded-lg text-xs text-muted-foreground">

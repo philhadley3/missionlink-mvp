@@ -5,7 +5,8 @@ import { feature as topoFeature } from "topojson-client";
 import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 import { useAuth } from "../context/AuthContext.jsx";
-import { api, API_BASE as API_BASE_ENV } from "../lib/api";
+import { api } from "../lib/api";
+import { toBackendUrl } from "../lib/fileUrls";
 
 countriesLib.registerLocale(enLocale);
 
@@ -15,15 +16,31 @@ const AFL_LIGHT = "#F4F4F4";
 const AFL_STROKE = "#808080";
 const AFL_SKY = "#6699CC";
 
-// Use shared base; default to /api so Vercel can proxy to Render
-const API_BASE = API_BASE_ENV || "/api";
+// Use absolute backend base when available; otherwise same-origin.
+// (Don’t default to "/api" here to avoid bad prefixes for links.)
+const API_BASE = API_BASE_ENV || "";
 
 function toBackendUrl(url) {
   if (!url) return "";
   if (/^https?:\/\//i.test(url)) return url; // already absolute
-  const path = url.startsWith("/") ? url : `/${url}`;
-  // e.g. /api/uploads/...
-  return `${API_BASE}${path}`;
+
+  // Start with a normalized leading slash
+  let path = url.startsWith("/") ? url : `/${url}`;
+
+  // Rewrite any legacy upload paths to the new file-serving route:
+  //   /api/uploads/<file>  -> /api/files/<file>
+  //   /uploads/<file>      -> /api/files/<file>
+  //   /api/upload...       -> /api/files...
+  if (path.startsWith("/api/uploads/")) {
+    path = "/api/files/" + path.slice("/api/uploads/".length);
+  } else if (path.startsWith("/uploads/")) {
+    path = "/api/files/" + path.slice("/uploads/".length);
+  } else if (path.startsWith("/api/upload")) {
+    path = path.replace("/api/upload", "/api/files");
+  }
+
+  // Prefix with backend domain if provided
+  return API_BASE ? `${API_BASE}${path}` : path;
 }
 
 export default function GlobeView() {
@@ -396,22 +413,26 @@ export default function GlobeView() {
                             </div>
                           )}
 
-                          {r.file_url && (
-                            <div style={{ marginTop: 8 }}>
-                              <a
-                                href={toBackendUrl(r.file_url)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-sm"
-                                style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
-                              >
-                                {r.file_name || "Download attachment"}
-                              </a>
-                              {r.file_mime && (
-                                <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
-                              )}
-                            </div>
-                          )}
+                          {(() => {
+  const href = toBackendUrl(r.file_url);
+  return href ? (
+    <div style={{ marginTop: 8 }}>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sm"
+        style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
+      >
+        {r.file_name || "Download attachment"}
+      </a>
+      {r.file_mime && (
+        <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
+      )}
+    </div>
+  ) : null;
+})()}
+
 
                           {Array.isArray(r.images) && r.images.length > 0 && (
                             <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>

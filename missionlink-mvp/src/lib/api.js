@@ -8,10 +8,7 @@ export class HttpError extends Error {
   }
 }
 
-// Prefer new var, fall back to old, and default to /api for prod proxy
-export const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ||
-  "/api";
+export const API_BASE = import.meta.env.VITE_API_URL || "";
 
 
 // Join base + path safely; keep absolute URLs untouched
