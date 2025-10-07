@@ -1,14 +1,38 @@
 // src/lib/fileUrls.js
 import { API_BASE as API_BASE_ENV } from "./api";
 
-// If the env is missing but we're on Vercel, fall back to the Render backend.
-const FALLBACK_BACKEND = "https://missionlink-mvp.onrender.com";
+// Where your Flask backend lives
+const RENDER_BACKEND = "https://missionlink-mvp.onrender.com";
 
-// Full backend origin for prod, or "" in dev
-let API_BASE = (API_BASE_ENV || "").trim();
-// Fallback if missing AND we’re clearly on a Vercel domain
-if (!API_BASE && typeof window !== "undefined" && /\.vercel\.app$/i.test(window.location.hostname)) {
-  API_BASE = FALLBACK_BACKEND;
+// Resolve a safe base:
+// - Prod: absolute from env (strip trailing / and /api)
+// - If env is empty or relative ("/api"), and we are on a Vercel domain, force absolute Render base
+// - Dev (localhost): allow same-origin by returning ""
+function resolveBase() {
+  let base = (API_BASE_ENV || "").trim();
+
+  const isAbsolute = /^https?:\/\//i.test(base);
+  const isRelative = !!base && !isAbsolute;
+
+  const onVercel =
+    typeof window !== "undefined" && /\.vercel\.app$/i.test(window.location.hostname);
+
+  if (!base || isRelative) {
+    // If we're on Vercel and the base is missing/relative, force absolute Render origin
+    return onVercel ? RENDER_BACKEND : "";
+  }
+
+  // Absolute: normalize trailing slashes and trailing /api
+  return base.replace(/\/+$/, "").replace(/\/api$/i, "");
+}
+
+const BASE = resolveBase();
+
+// Optional: debug
+if (typeof window !== "undefined") {
+  window.__API_BASE = BASE;
+  // eslint-disable-next-line no-console
+  console.log("[fileUrls] BASE =", BASE);
 }
 
 export function toBackendUrl(url) {
@@ -18,10 +42,10 @@ export function toBackendUrl(url) {
   // Already absolute? Return as-is.
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Normalize the path
+  // Normalize path
   let path = raw.startsWith("/") ? raw : `/${raw}`;
 
-  // Rewrite legacy paths to the new public route
+  // Rewrite legacy paths to the public route
   if (path.startsWith("/api/uploads/")) {
     path = "/api/files/" + path.slice("/api/uploads/".length);
   } else if (path.startsWith("/uploads/")) {
@@ -30,19 +54,11 @@ export function toBackendUrl(url) {
     path = path.replace("/api/upload", "/api/files");
   }
 
-  // No base configured → same-origin
-  if (!API_BASE) return path;
-
-  // Absolute base: strip trailing "/" and any trailing "/api"
-  if (/^https?:\/\//i.test(API_BASE)) {
-    const origin = API_BASE.replace(/\/+$/, "").replace(/\/api$/i, "");
-    // Final guard against accidental /api/api
-    return (origin + path).replace(/\/api\/api(\/|$)/, "/api$1");
+  // If we have an absolute base, join and guard against /api/api
+  if (BASE) {
+    return (BASE + path).replace(/\/api\/api(\/|$)/, "/api$1");
   }
 
-  // Relative base (not recommended in prod)
-  const basePath = API_BASE.startsWith("/") ? API_BASE : `/${API_BASE}`;
-  if (path.startsWith(basePath + "/") || path === basePath) return path;
-  if (basePath === "/api" && path.startsWith("/api/")) return path;
-  return `${basePath}${path}`;
+  // Same-origin fallback (dev)
+  return path;
 }
