@@ -23,12 +23,12 @@ def create_app():
 
     secret = os.getenv("FLASK_SECRET_KEY")
     if not secret and flask_env == "production":
-        raise RuntimeError("FLASK_SECRET_KEY is required in production")
+      raise RuntimeError("FLASK_SECRET_KEY is required in production")
     app.config["SECRET_KEY"] = secret or "dev-only-change-me"
 
     jwt_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("JWT_SECRET")
     if not jwt_secret and flask_env == "production":
-        raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
+      raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
     app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
 
     # Database
@@ -67,6 +67,9 @@ def create_app():
     DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
     upload_dir = os.path.abspath(os.getenv('UPLOAD_DIR', DEFAULT_UPLOAD_DIR))
     os.makedirs(upload_dir, exist_ok=True)
+
+    # ✅ ensure all code uses the same folder
+    app.config["UPLOAD_FOLDER"] = upload_dir
 
     # Serve files under /api/files/<filename> with GET/HEAD/OPTIONS
     @app.route('/api/files/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])

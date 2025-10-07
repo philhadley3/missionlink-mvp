@@ -1,5 +1,5 @@
 # app/routes.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 import os, uuid, mimetypes
@@ -98,7 +98,7 @@ def missionaries_by_country(iso2):
             'website': m.website,
             'bio': m.bio,
             'avatar_url': m.avatar_url,
-            'email': u.email if u else None,   # <-- add this
+            'email': u.email if u else None,
         })
     return jsonify(out)
 
@@ -163,13 +163,18 @@ def upload_avatar():
     allowed_ext = {'png','jpg','jpeg','gif','webp'}
     ext = f.filename.rsplit('.',1)[-1].lower() if '.' in f.filename else ''
     if ext not in allowed_ext: return jsonify({'error':'unsupported file type'}), 400
+
+    # --- use mounted upload dir + serve via /api/files ---
     filename = secure_filename(f'{u.id}_avatar.{ext}')
-    upload_path = os.path.join(os.getcwd(), 'uploads'); os.makedirs(upload_path, exist_ok=True)
+    upload_path = current_app.config.get("UPLOAD_FOLDER")
+    os.makedirs(upload_path, exist_ok=True)
     f.save(os.path.join(upload_path, filename))
-    url = f'/uploads/{filename}'
+    url = f'/api/files/{filename}'
+
     u.missionary.avatar_url = url
     db.session.commit()
     return jsonify({'message':'uploaded','avatar_url':url})
+
 @api_bp.route('/me', methods=['DELETE'])
 @jwt_required()
 def delete_me():
@@ -192,13 +197,17 @@ def delete_me():
             # attached doc
             if r.file_url:
                 try:
-                    os.remove(r.file_url.lstrip('/'))
+                    p = _fs_path_from_url(r.file_url)
+                    if p and os.path.isfile(p):
+                        os.remove(p)
                 except Exception:
                     pass
             # images
             for img in list(r.images):
                 try:
-                    os.remove(img.url.lstrip('/'))
+                    p = _fs_path_from_url(img.url)
+                    if p and os.path.isfile(p):
+                        os.remove(p)
                 except Exception:
                     pass
                 db.session.delete(img)
@@ -210,7 +219,9 @@ def delete_me():
         # Avatar
         if m.avatar_url:
             try:
-                os.remove(m.avatar_url.lstrip('/'))
+                p = _fs_path_from_url(m.avatar_url)
+                if p and os.path.isfile(p):
+                    os.remove(p)
             except Exception:
                 pass
 
@@ -277,34 +288,74 @@ def set_assignments():
     db.session.commit()
     return jsonify({'message': 'assignments_updated', 'countries': wanted_iso})
 
-# ---------- file helpers ----------
+# ---------- file helpers (mounted disk + /api/files URLs) ----------
+def _upload_dir() -> str:
+    return current_app.config.get("UPLOAD_FOLDER")
+
+def _public_url(filename: str) -> str:
+    return f"/api/files/{filename}"
+
+def _fs_path_from_url(url: str) -> str | None:
+    """
+    Map a stored URL back to the filesystem path inside UPLOAD_FOLDER.
+    Supports new-style /api/files/<name> and legacy /uploads/<name>.
+    """
+    if not url:
+        return None
+    base = _upload_dir()
+    if not base:
+        return None
+
+    token = "/api/files/"
+    if token in url:
+        name = url.split(token, 1)[1]
+    else:
+        # legacy
+        if "/uploads/" in url:
+            name = url.split("/uploads/", 1)[1]
+        else:
+            # bare filename as a last resort
+            name = url.lstrip("/")
+
+    if not name:
+        return None
+    return os.path.join(base, name)
+
 def _save_doc(file_obj, user_id):
     allowed_mimes = {'application/pdf','text/plain','text/markdown','application/rtf'}
-    mime = file_obj.mimetype or ''
-    ext = (file_obj.filename.rsplit('.',1)[-1].lower() if '.' in file_obj.filename else '')
+    mime = (file_obj.mimetype or '').split(';')[0]
+    ext = (file_obj.filename.rsplit('.',1)[-1].lower() if '.' in (file_obj.filename or '') else '')
     if (mime not in allowed_mimes) and (ext not in {'pdf','txt','md','rtf'}):
         return None
+
     safe_name = secure_filename(file_obj.filename or f'report_{uuid.uuid4().hex}')
-    save_name = f"report_{user_id}_{uuid.uuid4().hex}_{safe_name}"
-    upload_path = os.path.join(os.getcwd(), 'uploads'); os.makedirs(upload_path, exist_ok=True)
+    # Generate a durable on-disk name; preserve original name separately
+    suffix = os.path.splitext(safe_name)[1] or ('.pdf' if mime == 'application/pdf' else '')
+    save_name = f"report_{user_id}_{uuid.uuid4().hex}{suffix}"
+
+    upload_path = _upload_dir()
+    os.makedirs(upload_path, exist_ok=True)
     file_obj.save(os.path.join(upload_path, save_name))
-    file_url = f'/uploads/{save_name}'
+
+    file_url = _public_url(save_name)
     if not mime:
         mime = mimetypes.guess_type(save_name)[0] or 'application/octet-stream'
-    return (file_url, mime, file_obj.filename)
+    return (file_url, mime, file_obj.filename or safe_name)
 
 def _save_images(files, user_id, report_id):
     out = []
-    upload_path = os.path.join(os.getcwd(), 'uploads')
+    upload_path = _upload_dir()
     os.makedirs(upload_path, exist_ok=True)
-    for f in files:
+    for f in files or []:
         if not f or f.filename == '':
             continue
         ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
         if ext not in {'jpg','jpeg','png','gif','webp'}:
             continue
         safe = secure_filename(f.filename)
-        save_name = f"reportimg_{user_id}_{uuid.uuid4().hex}_{safe}"
+        # durable name
+        suffix = f".{ext}" if ext else ""
+        save_name = f"reportimg_{user_id}_{report_id}_{uuid.uuid4().hex}{suffix}"
         file_path = os.path.join(upload_path, save_name)
         f.save(file_path)
         try:
@@ -316,7 +367,7 @@ def _save_images(files, user_id, report_id):
             try: os.remove(file_path)
             except Exception: pass
             continue
-        url = f'/uploads/{save_name}'
+        url = _public_url(save_name)
         mime = mimetypes.guess_type(file_path)[0] or (f'image/{ext or "jpeg"}')
         img_row = ReportImage(report_id=report_id, url=url, mime=mime, name=f.filename, width=width, height=height)
         db.session.add(img_row); out.append(img_row)
@@ -399,11 +450,24 @@ def delete_my_report(rid):
     r = Report.query.get_or_404(rid)
     if r.missionary_id != u.missionary.id:
         return jsonify({'error':'forbidden'}), 403
+
+    # delete attached doc
     if r.file_url:
-        try: os.remove(r.file_url.lstrip('/'))
-        except Exception: pass
+        try:
+            p = _fs_path_from_url(r.file_url)
+            if p and os.path.isfile(p):
+                os.remove(p)
+        except Exception:
+            pass
+
+    # delete attached images
     for img in r.images:
-        try: os.remove(img.url.lstrip('/'))
-        except Exception: pass
+        try:
+            p = _fs_path_from_url(img.url)
+            if p and os.path.isfile(p):
+                os.remove(p)
+        except Exception:
+            pass
+
     db.session.delete(r); db.session.commit()
     return jsonify({'message':'deleted'})
