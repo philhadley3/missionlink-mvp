@@ -8,7 +8,7 @@ export class HttpError extends Error {
   }
 }
 
-export const API_BASE = import.meta.env.VITE_API_URL || "";
+export const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
 
 
 // Join base + path safely; keep absolute URLs untouched
