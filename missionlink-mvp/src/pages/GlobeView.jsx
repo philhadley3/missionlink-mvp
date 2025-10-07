@@ -16,33 +16,6 @@ const AFL_LIGHT = "#F4F4F4";
 const AFL_STROKE = "#808080";
 const AFL_SKY = "#6699CC";
 
-// Use absolute backend base when available; otherwise same-origin.
-// (Don’t default to "/api" here to avoid bad prefixes for links.)
-const API_BASE = API_BASE_ENV || "";
-
-function toBackendUrl(url) {
-  if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url; // already absolute
-
-  // Start with a normalized leading slash
-  let path = url.startsWith("/") ? url : `/${url}`;
-
-  // Rewrite any legacy upload paths to the new file-serving route:
-  //   /api/uploads/<file>  -> /api/files/<file>
-  //   /uploads/<file>      -> /api/files/<file>
-  //   /api/upload...       -> /api/files...
-  if (path.startsWith("/api/uploads/")) {
-    path = "/api/files/" + path.slice("/api/uploads/".length);
-  } else if (path.startsWith("/uploads/")) {
-    path = "/api/files/" + path.slice("/uploads/".length);
-  } else if (path.startsWith("/api/upload")) {
-    path = path.replace("/api/upload", "/api/files");
-  }
-
-  // Prefix with backend domain if provided
-  return API_BASE ? `${API_BASE}${path}` : path;
-}
-
 export default function GlobeView() {
   const globeEl = useRef();
   const { token } = useAuth();
@@ -182,7 +155,7 @@ export default function GlobeView() {
   }
   // ------------------------------------
 
-  // (Optional) detail hydration cache (left as-is; not critical to API base fix)
+  // (Optional) detail hydration cache
   const [hydrating, setHydrating] = useState(false);
   const detailCacheRef = useRef(new Map());
   function getIds(m) {
@@ -236,7 +209,7 @@ export default function GlobeView() {
     } catch (e) {
       let msg = "Request failed.";
       if (e instanceof TypeError) {
-        msg = "Network/CORS error. Verify API URL (VITE_API_BASE_URL), HTTPS, and CORS policy.";
+        msg = "Network/CORS error. Verify API URL (VITE_API_URL), HTTPS, and CORS policy.";
       } else if (e?.status) {
         const body = (e.body || "").slice(0, 500);
         msg = `${e.status} ${e.message}${body ? ` — ${body}` : ""}`;
@@ -413,33 +386,34 @@ export default function GlobeView() {
                             </div>
                           )}
 
+                          {/* PDF attachment */}
                           {(() => {
-  const href = toBackendUrl(r.file_url);
-  return href ? (
-    <div style={{ marginTop: 8 }}>
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-sm"
-        style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
-      >
-        {r.file_name || "Download attachment"}
-      </a>
-      {r.file_mime && (
-        <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
-      )}
-    </div>
-  ) : null;
-})()}
+                            const href = toBackendUrl(r.file_url);
+                            return href ? (
+                              <div style={{ marginTop: 8 }}>
+                                <a
+                                  href={href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm"
+                                  style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
+                                >
+                                  {r.file_name || "Download attachment"}
+                                </a>
+                                {r.file_mime && (
+                                  <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
+                                )}
+                              </div>
+                            ) : null;
+                          })()}
 
-
+                          {/* Thumbnails */}
                           {Array.isArray(r.images) && r.images.length > 0 && (
                             <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>
                               {r.images.slice(0, 4).map((img, i) => (
                                 <img
                                   key={img.id || i}
-                                  src={img.url}
+                                  src={toBackendUrl(img.url)}
                                   alt="report"
                                   style={{
                                     width: 72,

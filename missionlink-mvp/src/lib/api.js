@@ -10,6 +10,18 @@ export class HttpError extends Error {
 
 export const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
 
+// --- Diagnostics: force log in any build and expose a global ---------------
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line no-console
+  console.log(
+    "[env] MODE=", import.meta.env.MODE,
+    "DEV=", import.meta.env.DEV,
+    "VITE_API_URL=", import.meta.env.VITE_API_URL,
+    "API_BASE=", API_BASE
+  );
+  window.__API_BASE = API_BASE;
+}
+// ---------------------------------------------------------------------------
 
 // Join base + path safely; keep absolute URLs untouched
 function joinUrl(base, path) {
