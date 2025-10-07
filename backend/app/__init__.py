@@ -68,9 +68,16 @@ def create_app():
     upload_dir = os.path.abspath(os.getenv('UPLOAD_DIR', DEFAULT_UPLOAD_DIR))
     os.makedirs(upload_dir, exist_ok=True)
 
-    @app.route('/uploads/<path:filename>')
+    # Serve files under /api/files/<filename> with GET/HEAD/OPTIONS
+    @app.route('/api/files/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
+    def api_files(filename):
+        # Let the browser display PDFs inline
+        return send_from_directory(upload_dir, filename, as_attachment=False)
+
+    # Keep legacy non-API path if anything still links to it
+    @app.route('/uploads/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
     def uploads(filename):
-        return send_from_directory(upload_dir, filename)
+        return send_from_directory(upload_dir, filename, as_attachment=False)
 
     # --- Health & preflight ---------------------------------------------------
     @app.get("/healthz")
