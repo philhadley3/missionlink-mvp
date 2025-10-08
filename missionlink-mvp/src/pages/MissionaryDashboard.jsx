@@ -17,7 +17,7 @@ import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 countriesLib.registerLocale(enLocale);
 import { api, API_BASE } from "../lib/api";
-import { toBackendUrl } from "../lib/fileUrls"; // ✅ NEW
+import { toBackendUrl, toPublicUploadUrl } from "../lib/fileUrls";
 
 /**
  * Missionary Dashboard – API-backed version
@@ -292,7 +292,7 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
     if (!u) return "";
     const s = String(u);
     if (/^data:/i.test(s)) return s;
-    return toBackendUrl(s);
+    return toPublicUploadUrl(s);
   }
 
   const canSaveReport = !!form.country && !!form.title?.trim();
@@ -466,7 +466,7 @@ function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating
                           {r.file_url && (
                             <div className="mt-4">
                               <a
-                                href={toBackendUrl(r.file_url)} // ✅ fixed
+                                href={toPublicUploadUrl(r.file_url)} // ✅ fixed
                                 target="_blank"
                                 rel="noreferrer"
                                 className="inline-flex items-center gap-2 underline"
