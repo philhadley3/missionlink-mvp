@@ -386,32 +386,23 @@ export default function GlobeView() {
                             </div>
                           )}
 
-                          {/* PDF attachment — PUBLIC link (never /api) */}
-                          {(() => {
-                            const pdfCandidate =
-                              r.file_url ||
-                              r.file_path ||
-                              r.file ||
-                              r.pdf_path ||
-                              r.pdf;
-                            const href = toPublicUploadUrl(pdfCandidate);
-                            return href ? (
-                              <div style={{ marginTop: 8 }}>
-                                <a
-                                  href={href}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sm"
-                                  style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
-                                >
-                                  {r.file_name || r.title || "Open PDF"}
-                                </a>
-                                {r.file_mime && (
-                                  <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
-                                )}
-                              </div>
-                            ) : null;
-                          })()}
+                          {/* PDF attachment — PUBLIC link (same as Dashboard) */}
+                          {r.file_url && (
+                            <div style={{ marginTop: 8 }}>
+                              <a
+                                href={toPublicUploadUrl(r.file_url)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm"
+                                style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
+                              >
+                                {r.file_name || r.title || "Open PDF"}
+                              </a>
+                              {r.file_mime && (
+                                <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
+                              )}
+                            </div>
+                          )}
 
                           {/* Thumbnails — also public */}
                           {Array.isArray(r.images) && r.images.length > 0 && (
