@@ -53,7 +53,8 @@ function ensureApiPrefix(path) {
  * Build URLs for BACKEND **API** calls.
  * - Absolute URLs are returned as-is.
  * - Guarantees a single `/api/...` (prevents `/api/api`).
- * - Passes through `/uploads/...` or `/files/...` untouched (so you don't accidentally API-ify public files).
+ * - Treats `/api/uploads/...` and `/api/files/...` as **public** (returns non-API path).
+ * - Passes through `/uploads/...` or `/files/...` untouched.
  */
 export function toBackendUrl(urlOrPath) {
   if (!urlOrPath) return "";
@@ -62,9 +63,19 @@ export function toBackendUrl(urlOrPath) {
   // Already absolute? Return as-is.
   if (/^https?:\/\//i.test(raw)) return raw;
 
+  // Normalize once for checks
+  const noLeadSlash = raw.replace(/^\/+/, "");
+
+  // 🔧 Treat legacy /api/uploads or /api/files as PUBLIC, not API
+  if (/^api\/(?:uploads|files)\//i.test(noLeadSlash)) {
+    const publicish = noLeadSlash.replace(/^(?:api\/)+/i, ""); // drop ALL leading api/
+    const path = `/${publicish}`;
+    return BASE ? joinUrl(BASE, path) : path;
+  }
+
   // If the caller passes a public path, don't rewrite it into /api
-  if (/^\/?uploads\//i.test(raw) || /^\/?files\//i.test(raw)) {
-    const path = `/${raw.replace(/^\/+/, "")}`;
+  if (/^(?:uploads|files)\//i.test(noLeadSlash)) {
+    const path = `/${noLeadSlash}`;
     return BASE ? joinUrl(BASE, path) : path;
   }
 
@@ -85,6 +96,7 @@ export function toBackendUrl(urlOrPath) {
  *      • "filename.pdf" → /uploads/filename.pdf
  *      • "uploads/filename.pdf" → /uploads/filename.pdf
  *      • "/api/uploads/filename.pdf" or "/api/files/..." → normalized to /uploads/...
+ *      • "/api/api/uploads/..." → normalized as well (strip ALL leading api/)
  */
 export function toPublicUploadUrl(serverPathOrFilename) {
   if (!serverPathOrFilename) return "";
@@ -92,14 +104,13 @@ export function toPublicUploadUrl(serverPathOrFilename) {
   // Absolute? Return as-is.
   if (/^https?:\/\//i.test(serverPathOrFilename)) return serverPathOrFilename;
 
-  // Strip any leading /api/, then normalize to /uploads/...
   let clean = String(serverPathOrFilename).trim();
 
   // Remove any leading slashes for normalization
   clean = clean.replace(/^\/+/, "");
 
-  // Drop any "api/" prefix (e.g., "api/uploads/foo.pdf" → "uploads/foo.pdf")
-  clean = clean.replace(/^api\/+/i, "");
+  // 🔧 Strip ALL leading "api/" prefixes (handles /api/uploads, /api/api/uploads, etc.)
+  clean = clean.replace(/^(?:api\/)+/i, "");
 
   // Map "files/..." to "uploads/..." if backend used that alias previously
   if (/^files\//i.test(clean)) {
