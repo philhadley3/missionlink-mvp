@@ -16,6 +16,9 @@ const AFL_LIGHT = "#F4F4F4";
 const AFL_STROKE = "#808080";
 const AFL_SKY = "#6699CC";
 
+// ➕ Bump map texture (public domain)
+const EARTH_BUMP = "https://unpkg.com/three-globe/example/img/earth-topology.png";
+
 export default function GlobeView() {
   const globeEl = useRef();
   const { token } = useAuth();
@@ -77,6 +80,15 @@ export default function GlobeView() {
     document.body.style.cursor = hovered ? "pointer" : "default";
     return () => { document.body.style.cursor = "default"; };
   }, [hovered]);
+
+  // ➕ Subtle terrain depth
+  useEffect(() => {
+    if (!globeEl.current) return;
+    const material = globeEl.current.globeMaterial && globeEl.current.globeMaterial();
+    if (!material) return;
+    // Adjust to taste (5–15). Higher = more pronounced shading.
+    material.bumpScale = 10;
+  }, []);
 
   // Resolve ISO2 from TopoJSON feature id (numeric -> alpha-2)
   function getIso2FromFeature(feat) {
@@ -228,8 +240,10 @@ export default function GlobeView() {
         <div className="w-full h-full flex items-center justify-center relative z-10">
           <Globe
             ref={globeEl}
-            globeImageUrl="/textures/blue.png"
-            backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
+            globeImageUrl="https://unpkg.com/three-globe/example/img/earth-day.jpg"
+            bumpImageUrl={EARTH_BUMP}
+backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
+
             rendererConfig={{ antialias: true, alpha: true }}
             width={undefined}
             height={undefined}
@@ -239,11 +253,11 @@ export default function GlobeView() {
             polygonCapColor={(d) =>
               d === hovered || d?.id === activeId
                 ? "rgb(182, 152, 98)"
-                : "rgba(244,244,244,0.80)"
+                : "rgba(128,128,128,0.8)"
             }
-            polygonSideColor={() => "rgba(0,0,0,0.15)"}
-            polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#FFFFFF")}
-            polygonStrokeWidth={2.0}
+            polygonSideColor={() => "rgba(0,0,0, 0.5)"}
+            polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#000000")}
+            polygonStrokeWidth={1.0}
             onPolygonHover={setHovered}
             onPolygonClick={handleCountryClick}
           />

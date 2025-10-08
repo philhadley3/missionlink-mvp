@@ -6,6 +6,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
+import re
 import traceback
 
 db = SQLAlchemy()
@@ -18,36 +19,44 @@ def create_app():
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # --- Core config ----------------------------------------------------------
-    # Secrets from environment (no hard-coding)
     flask_env = os.getenv("FLASK_ENV", "development")
 
     secret = os.getenv("FLASK_SECRET_KEY")
     if not secret and flask_env == "production":
-      raise RuntimeError("FLASK_SECRET_KEY is required in production")
+        raise RuntimeError("FLASK_SECRET_KEY is required in production")
     app.config["SECRET_KEY"] = secret or "dev-only-change-me"
 
     jwt_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("JWT_SECRET")
     if not jwt_secret and flask_env == "production":
-      raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
+        raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
     app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
 
     # Database
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///missionlink.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # --- CORS for frontend (dev + optional prod origin) -----------------------
-    FRONTEND_ORIGINS = {
+    # --- CORS for frontend (dev + prod) --------------------------------------
+    # Base allowlist
+    cors_origins = {
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://missionlink.anchorsforlife.org",
     }
-    prod_origin = os.getenv("CORS_ORIGIN")
-    if prod_origin:
-        FRONTEND_ORIGINS.add(prod_origin)
+    # Allow all Vercel preview domains (e.g. https://yourapp.vercel.app)
+    cors_regexes = [re.compile(r"^https://.*\.vercel\.app$")]
+
+    # Optional env override: CORS_ORIGINS="https://foo.com,https://bar.com"
+    extra = os.getenv("CORS_ORIGINS", "").strip()
+    if extra:
+        for origin in [o.strip() for o in extra.split(",") if o.strip()]:
+            cors_origins.add(origin)
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": list(FRONTEND_ORIGINS)}},
-        supports_credentials=True,
+        resources={r"/api/*": {"origins": list(cors_origins) + cors_regexes}},
+        supports_credentials=True,  # safe even if you use header-based JWT
         allow_headers=["Content-Type", "Authorization"],
         expose_headers=["Content-Type", "Authorization"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -67,17 +76,14 @@ def create_app():
     DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
     upload_dir = os.path.abspath(os.getenv('UPLOAD_DIR', DEFAULT_UPLOAD_DIR))
     os.makedirs(upload_dir, exist_ok=True)
-
-    # ✅ ensure all code uses the same folder
     app.config["UPLOAD_FOLDER"] = upload_dir
 
     # Serve files under /api/files/<filename> with GET/HEAD/OPTIONS
     @app.route('/api/files/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
     def api_files(filename):
-        # Let the browser display PDFs inline
         return send_from_directory(upload_dir, filename, as_attachment=False)
 
-    # Keep legacy non-API path if anything still links to it
+    # Legacy path for anything still linking to /uploads/...
     @app.route('/uploads/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
     def uploads(filename):
         return send_from_directory(upload_dir, filename, as_attachment=False)
@@ -85,6 +91,10 @@ def create_app():
     # --- Health & preflight ---------------------------------------------------
     @app.get("/healthz")
     def healthz():
+        return {"status": "ok"}, 200
+
+    @app.get("/api/health")
+    def api_health():
         return {"status": "ok"}, 200
 
     @app.route("/api/<path:subpath>", methods=["OPTIONS"])
