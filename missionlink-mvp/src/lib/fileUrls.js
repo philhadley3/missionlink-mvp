@@ -1,28 +1,28 @@
 // src/lib/fileUrls.js
 import { API_BASE as API_BASE_ENV } from "./api";
 
-// Where your Flask backend lives
+// Where your Flask backend lives (Render)
 const RENDER_BACKEND = "https://missionlink-mvp.onrender.com";
 
-// Resolve a safe base:
-// - Prod: absolute from env (strip trailing / and /api)
-// - If env is empty or relative ("/api"), and we are on a Vercel domain, force absolute Render base
-// - Dev (localhost): allow same-origin by returning ""
+/**
+ * Resolve a safe "origin" base (no trailing slash, no trailing /api).
+ * - Prod: take absolute from env and normalize.
+ * - Vercel + missing/relative env: use absolute Render origin.
+ * - Dev (localhost): return "" to use same-origin.
+ */
 function resolveBase() {
   let base = (API_BASE_ENV || "").trim();
 
   const isAbsolute = /^https?:\/\//i.test(base);
-  const isRelative = !!base && !isAbsolute;
-
   const onVercel =
     typeof window !== "undefined" && /\.vercel\.app$/i.test(window.location.hostname);
 
-  if (!base || isRelative) {
-    // If we're on Vercel and the base is missing/relative, force absolute Render origin
+  if (!base || (base && !isAbsolute)) {
+    // If env missing/relative, prefer absolute Render in prod; same-origin in dev.
     return onVercel ? RENDER_BACKEND : "";
   }
 
-  // Absolute: normalize trailing slashes and trailing /api
+  // Normalize: strip trailing slashes and trailing /api
   return base.replace(/\/+$/, "").replace(/\/api$/i, "");
 }
 
@@ -35,30 +35,52 @@ if (typeof window !== "undefined") {
   console.log("[fileUrls] BASE =", BASE);
 }
 
-export function toBackendUrl(url) {
-  if (!url) return "";
-  const raw = String(url).trim();
+/** Small helper: cleanly join parts with single slashes. */
+function joinUrl(base, path) {
+  if (!base) return path;
+  return `${base.replace(/\/+$/, "")}/${String(path || "").replace(/^\/+/, "")}`;
+}
+
+/** Ensure a path starts with exactly one `/api/` prefix. */
+function ensureApiPrefix(path) {
+  const p = `/${String(path || "").replace(/^\/+/, "")}`; // leading slash
+  // Strip any leading "api/" then add one canonical "/api/"
+  const noApi = p.replace(/^\/?api\/+/i, "/");
+  return `/api${noApi}`;
+}
+
+/**
+ * Build URLs for BACKEND **API** calls.
+ * - Absolute URLs are returned as-is.
+ * - Guarantees a single `/api/...` (prevents `/api/api`).
+ * - Passes through `/uploads/...` untouched (so you don't accidentally API-ify public files).
+ */
+export function toBackendUrl(urlOrPath) {
+  if (!urlOrPath) return "";
+  const raw = String(urlOrPath).trim();
 
   // Already absolute? Return as-is.
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Normalize path
-  let path = raw.startsWith("/") ? raw : `/${raw}`;
-
-  // Rewrite legacy paths to the public route
-  if (path.startsWith("/api/uploads/")) {
-    path = "/api/files/" + path.slice("/api/uploads/".length);
-  } else if (path.startsWith("/uploads/")) {
-    path = "/api/files/" + path.slice("/uploads/".length);
-  } else if (path.startsWith("/api/upload")) {
-    path = path.replace("/api/upload", "/api/files");
+  // If the caller passes a public path, don't rewrite it into /api
+  if (/^\/?uploads\//i.test(raw) || /^\/?files\//i.test(raw)) {
+    const path = `/${raw.replace(/^\/+/, "")}`;
+    return BASE ? joinUrl(BASE, path) : path;
   }
 
-  // If we have an absolute base, join and guard against /api/api
-  if (BASE) {
-    return (BASE + path).replace(/\/api\/api(\/|$)/, "/api$1");
-  }
+  // Normal API flow
+  const apiPath = ensureApiPrefix(raw);
+  const full = BASE ? joinUrl(BASE, apiPath) : apiPath;
 
-  // Same-origin fallback (dev)
-  return path;
+  // Safety: collapse any accidental /api/api
+  return full.replace(/\/api\/api(\/|$)/i, "/api$1");
 }
+
+/**
+ * Build URLs for **PUBLIC FILES** (PDFs, images) served from /uploads.
+ * - Never prefixes `/api`.
+ * - Accepts:
+ *    - absolute URLs → returned as-is
+ *    - "filename.pdf" → /uploads/filename.pdf
+ *    - "uploads/filename.pdf" → /uploads/filename.pdf
+ *    - "/api/uploads/filename.pdf" or "/api/files/..." →*

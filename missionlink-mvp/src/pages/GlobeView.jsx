@@ -6,7 +6,7 @@ import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 import { useAuth } from "../context/AuthContext.jsx";
 import { api } from "../lib/api";
-import { toBackendUrl } from "../lib/fileUrls";
+import { toBackendUrl, toPublicUploadUrl } from "../lib/fileUrls";
 
 countriesLib.registerLocale(enLocale);
 
@@ -386,9 +386,15 @@ export default function GlobeView() {
                             </div>
                           )}
 
-                          {/* PDF attachment */}
+                          {/* PDF attachment — PUBLIC link (never /api) */}
                           {(() => {
-                            const href = toBackendUrl(r.file_url);
+                            const pdfCandidate =
+                              r.file_url ||
+                              r.file_path ||
+                              r.file ||
+                              r.pdf_path ||
+                              r.pdf;
+                            const href = toPublicUploadUrl(pdfCandidate);
                             return href ? (
                               <div style={{ marginTop: 8 }}>
                                 <a
@@ -398,7 +404,7 @@ export default function GlobeView() {
                                   className="text-sm"
                                   style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
                                 >
-                                  {r.file_name || "Download attachment"}
+                                  {r.file_name || r.title || "Open PDF"}
                                 </a>
                                 {r.file_mime && (
                                   <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
@@ -407,23 +413,28 @@ export default function GlobeView() {
                             ) : null;
                           })()}
 
-                          {/* Thumbnails */}
+                          {/* Thumbnails — also public */}
                           {Array.isArray(r.images) && r.images.length > 0 && (
                             <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>
-                              {r.images.slice(0, 4).map((img, i) => (
-                                <img
-                                  key={img.id || i}
-                                  src={toBackendUrl(img.url)}
-                                  alt="report"
-                                  style={{
-                                    width: 72,
-                                    height: 56,
-                                    objectFit: "cover",
-                                    borderRadius: 6,
-                                    border: "1px solid var(--border)",
-                                  }}
-                                />
-                              ))}
+                              {r.images.slice(0, 4).map((img, i) => {
+                                const imgHref = toPublicUploadUrl(
+                                  img?.url || img?.path || img?.src || img?.file
+                                );
+                                return (
+                                  <img
+                                    key={img.id || i}
+                                    src={imgHref}
+                                    alt="report"
+                                    style={{
+                                      width: 72,
+                                      height: 56,
+                                      objectFit: "cover",
+                                      borderRadius: 6,
+                                      border: "1px solid var(--border)",
+                                    }}
+                                  />
+                                );
+                              })}
                             </div>
                           )}
                         </div>
