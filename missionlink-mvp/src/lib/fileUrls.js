@@ -53,7 +53,7 @@ function ensureApiPrefix(path) {
  * Build URLs for BACKEND **API** calls.
  * - Absolute URLs are returned as-is.
  * - Guarantees a single `/api/...` (prevents `/api/api`).
- * - Passes through `/uploads/...` untouched (so you don't accidentally API-ify public files).
+ * - Passes through `/uploads/...` or `/files/...` untouched (so you don't accidentally API-ify public files).
  */
 export function toBackendUrl(urlOrPath) {
   if (!urlOrPath) return "";
@@ -78,9 +78,42 @@ export function toBackendUrl(urlOrPath) {
 
 /**
  * Build URLs for **PUBLIC FILES** (PDFs, images) served from /uploads.
- * - Never prefixes `/api`.
- * - Accepts:
- *    - absolute URLs → returned as-is
- *    - "filename.pdf" → /uploads/filename.pdf
- *    - "uploads/filename.pdf" → /uploads/filename.pdf
- *    - "/api/uploads/filename.pdf" or "/api/files/..." →*
+ * Behavior:
+ *  - Never prefixes `/api`.
+ *  - Accepts:
+ *      • absolute URLs → returned as-is
+ *      • "filename.pdf" → /uploads/filename.pdf
+ *      • "uploads/filename.pdf" → /uploads/filename.pdf
+ *      • "/api/uploads/filename.pdf" or "/api/files/..." → normalized to /uploads/...
+ */
+export function toPublicUploadUrl(serverPathOrFilename) {
+  if (!serverPathOrFilename) return "";
+
+  // Absolute? Return as-is.
+  if (/^https?:\/\//i.test(serverPathOrFilename)) return serverPathOrFilename;
+
+  // Strip any leading /api/, then normalize to /uploads/...
+  let clean = String(serverPathOrFilename).trim();
+
+  // Remove any leading slashes for normalization
+  clean = clean.replace(/^\/+/, "");
+
+  // Drop any "api/" prefix (e.g., "api/uploads/foo.pdf" → "uploads/foo.pdf")
+  clean = clean.replace(/^api\/+/i, "");
+
+  // Map "files/..." to "uploads/..." if backend used that alias previously
+  if (/^files\//i.test(clean)) {
+    clean = clean.replace(/^files\//i, "uploads/");
+  }
+
+  // If it already starts with uploads/, keep it; otherwise prepend
+  if (!/^uploads\//i.test(clean)) {
+    clean = `uploads/${clean}`;
+  }
+
+  const path = `/${clean}`;
+  return BASE ? joinUrl(BASE, path) : path;
+}
+
+// (Optional) export BASE if you need it elsewhere
+export { BASE };
