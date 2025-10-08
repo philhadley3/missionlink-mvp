@@ -6,7 +6,7 @@ import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 import { useAuth } from "../context/AuthContext.jsx";
 import { api } from "../lib/api";
-import { toBackendUrl, toPublicUploadUrl } from "../lib/fileUrls";
+import { toPublicUploadUrl } from "../lib/fileUrls";
 
 countriesLib.registerLocale(enLocale);
 
@@ -221,222 +221,209 @@ export default function GlobeView() {
   };
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 380px",
-        gap: 0,
-        height: "calc(100vh - 64px)",
-        minHeight: 400
-      }}
-    >
-      {/* Globe */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          width: "100%",
-          height: "100%",
-          overflow: "hidden",
-          zIndex: 1,
-          position: "relative"
-        }}
-      >
-        <Globe
-          ref={globeEl}
-          globeImageUrl="/textures/blue.png"
-          backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
-          rendererConfig={{ antialias: true, alpha: true }}
-          width={undefined}
-          height={undefined}
-          polygonsData={polygonsData}
-          polygonsTransitionDuration={0}
-          polygonAltitude={(d) => (d === hovered || d?.id === activeId ? 0.02 : 0.01)}
-          polygonCapColor={(d) =>
-            d === hovered || d?.id === activeId
-              ? "rgb(182, 152, 98)"
-              : "rgba(244,244,244,0.80)"
-          }
-          polygonSideColor={() => "rgba(0,0,0,0.15)"}
-          polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#FFFFFF")}
-          polygonStrokeWidth={2.0}
-          onPolygonHover={setHovered}
-          onPolygonClick={handleCountryClick}
-        />
+    // Page area below the fixed navbar (h-16). This wrapper fills the viewport minus 64px.
+    <div className="relative min-h-[calc(100vh-4rem)] bg-white">
+      {/* Globe area — on desktop, reserve room for the fixed sidebar using right padding */}
+      <div className="h-[calc(100vh-4rem)] md:pr-[380px] overflow-hidden">
+        <div className="w-full h-full flex items-center justify-center relative z-10">
+          <Globe
+            ref={globeEl}
+            globeImageUrl="/textures/blue.png"
+            backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
+            rendererConfig={{ antialias: true, alpha: true }}
+            width={undefined}
+            height={undefined}
+            polygonsData={polygonsData}
+            polygonsTransitionDuration={0}
+            polygonAltitude={(d) => (d === hovered || d?.id === activeId ? 0.02 : 0.01)}
+            polygonCapColor={(d) =>
+              d === hovered || d?.id === activeId
+                ? "rgb(182, 152, 98)"
+                : "rgba(244,244,244,0.80)"
+            }
+            polygonSideColor={() => "rgba(0,0,0,0.15)"}
+            polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#FFFFFF")}
+            polygonStrokeWidth={2.0}
+            onPolygonHover={setHovered}
+            onPolygonClick={handleCountryClick}
+          />
+        </div>
       </div>
 
-      {/* Sidebar */}
+      {/* Sidebar — fixed below navbar; scrolls independently; always under navbar z-index */}
       <aside
-        className="card"
+        className="
+          fixed top-16 right-0 z-20
+          w-full md:w-[380px]
+          h-[calc(100vh-4rem)]
+          overflow-y-auto bg-white
+          shadow-lg
+        "
         style={{
           borderLeft: "1px solid var(--border)",
           borderRadius: 0,
-          overflowY: "auto",
-          background: "#fff",
           color: "#222",
-          minWidth: 380,
-          zIndex: 50,
-          position: "relative",
           boxShadow: "-8px 0 24px rgba(0,0,0,.08)"
         }}
       >
-        {!active && (
-          <div>
-            <h3 style={{ marginTop: 0 }}>Select a country</h3>
-            <p className="muted">Click a country to view assigned missionaries.</p>
-          </div>
-        )}
+        <div className="p-4 md:p-5">
+          {!active && (
+            <div>
+              <h3 style={{ marginTop: 0 }}>Select a country</h3>
+              <p className="muted">Click a country to view assigned missionaries.</p>
+            </div>
+          )}
 
-        {active && (
-          <div>
-            <h3 style={{ marginTop: 0 }}>
-              {active.name}{active.iso2 ? ` (${active.iso2})` : ""}
-            </h3>
+          {active && (
+            <div>
+              <h3 style={{ marginTop: 0 }}>
+                {active.name}{active.iso2 ? ` (${active.iso2})` : ""}
+              </h3>
 
-            {active.loading && <p className="muted">Loading missionaries…</p>}
-            {active.error && <p style={{ color: "salmon" }}>{active.error}</p>}
+              {active.loading && <p className="muted">Loading missionaries…</p>}
+              {active.error && <p style={{ color: "salmon" }}>{active.error}</p>}
 
-            {!active.loading && !active.error && (
-              <div style={{ display: "grid", gap: 8 }}>
-                {hydrating && <p className="muted">Fetching contact details…</p>}
+              {!active.loading && !active.error && (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {hydrating && <p className="muted">Fetching contact details…</p>}
 
-                {active.missionaries.length === 0 && (
-                  <p className="muted">No missionaries found for this country.</p>
-                )}
+                  {active.missionaries.length === 0 && (
+                    <p className="muted">No missionaries found for this country.</p>
+                  )}
 
-                {active.missionaries.map((m, idx) => {
-                  const email = extractEmail(m);
-                  const website = extractWebsite(m);
-                  return (
-                    <div
-                      key={idx}
-                      style={{ padding: 8, border: "1px solid var(--brand-border, var(--border))", borderRadius: "8px" }}
-                    >
-                      <div style={{ fontWeight: 600 }}>
-                        {m.name || m.full_name || m.display_name || email || "Unnamed"}
-                      </div>
-
-                      <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
-                        {email && (
-                          <div className="text-sm">
-                            <span className="muted">Email: </span>
-                            <a href={`mailto:${email}`} style={{ color: "var(--brand-primary, #3673B6)" }}>
-                              {email}
-                            </a>
-                          </div>
-                        )}
-                        {website && (
-                          <div className="text-sm">
-                            <span className="muted">Website: </span>
-                            <a
-                              href={website}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ color: "var(--brand-primary, #3673B6)" }}
-                            >
-                              {urlLabel(website)}
-                            </a>
-                          </div>
-                        )}
-                        {m.organization && <div className="muted text-sm">{m.organization}</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* -------- Recent reports -------- */}
-                <hr style={{ margin: "12px 0", borderColor: "var(--border)" }} />
-                <h4 style={{ margin: "4px 0 8px", fontWeight: 600 }}>Recent reports</h4>
-
-                {(!active.reports || active.reports.length === 0) ? (
-                  <p className="muted">No reports found for this country.</p>
-                ) : (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {(active.reports || []).slice(0, 6).map((r, idx) => {
-                      const created = r.created_at ? new Date(r.created_at).toLocaleString() : "";
-                      return (
-                        <div
-                          key={r.id || idx}
-                          style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 8 }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "baseline",
-                              justifyContent: "space-between",
-                              gap: 8,
-                            }}
-                          >
-                            <div style={{ fontWeight: 600, lineHeight: 1.2 }}>
-                              {r.title || "Report"}
-                            </div>
-                            {created && <div className="muted" style={{ fontSize: 12 }}>{created}</div>}
-                          </div>
-
-                          {r.missionary && (
-                            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                              by {r.missionary}
-                            </div>
-                          )}
-
-                          {r.content && (
-                            <div style={{ fontSize: 13, marginTop: 6 }} className="muted">
-                              {r.content.length > 180 ? r.content.slice(0, 180) + "…" : r.content}
-                            </div>
-                          )}
-
-                          {/* PDF attachment — PUBLIC link (same as Dashboard) */}
-                          {r.file_url && (
-                            <div style={{ marginTop: 8 }}>
-                              <a
-                                href={toPublicUploadUrl(r.file_url)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm"
-                                style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
-                              >
-                                {r.file_name || r.title || "Open PDF"}
-                              </a>
-                              {r.file_mime && (
-                                <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Thumbnails — also public */}
-                          {Array.isArray(r.images) && r.images.length > 0 && (
-                            <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>
-                              {r.images.slice(0, 4).map((img, i) => {
-                                const imgHref = toPublicUploadUrl(
-                                  img?.url || img?.path || img?.src || img?.file
-                                );
-                                return (
-                                  <img
-                                    key={img.id || i}
-                                    src={imgHref}
-                                    alt="report"
-                                    style={{
-                                      width: 72,
-                                      height: 56,
-                                      objectFit: "cover",
-                                      borderRadius: 6,
-                                      border: "1px solid var(--border)",
-                                    }}
-                                  />
-                                );
-                              })}
-                            </div>
-                          )}
+                  {active.missionaries.map((m, idx) => {
+                    const email = extractEmail(m);
+                    const website = extractWebsite(m);
+                    return (
+                      <div
+                        key={idx}
+                        style={{ padding: 8, border: "1px solid var(--brand-border, var(--border))", borderRadius: "8px" }}
+                      >
+                        <div style={{ fontWeight: 600 }}>
+                          {m.name || m.full_name || m.display_name || email || "Unnamed"}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+
+                        <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                          {email && (
+                            <div className="text-sm">
+                              <span className="muted">Email: </span>
+                              <a href={`mailto:${email}`} style={{ color: "var(--brand-primary, #3673B6)" }}>
+                                {email}
+                              </a>
+                            </div>
+                          )}
+                          {website && (
+                            <div className="text-sm">
+                              <span className="muted">Website: </span>
+                              <a
+                                href={website}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{ color: "var(--brand-primary, #3673B6)" }}
+                              >
+                                {urlLabel(website)}
+                              </a>
+                            </div>
+                          )}
+                          {m.organization && <div className="muted text-sm">{m.organization}</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* -------- Recent reports -------- */}
+                  <hr style={{ margin: "12px 0", borderColor: "var(--border)" }} />
+                  <h4 style={{ margin: "4px 0 8px", fontWeight: 600 }}>Recent reports</h4>
+
+                  {(!active.reports || active.reports.length === 0) ? (
+                    <p className="muted">No reports found for this country.</p>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {(active.reports || []).slice(0, 6).map((r, idx) => {
+                        const created = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+                        return (
+                          <div
+                            key={r.id || idx}
+                            style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 8 }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "baseline",
+                                justifyContent: "space-between",
+                                gap: 8,
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, lineHeight: 1.2 }}>
+                                {r.title || "Report"}
+                              </div>
+                              {created && <div className="muted" style={{ fontSize: 12 }}>{created}</div>}
+                            </div>
+
+                            {r.missionary && (
+                              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                                by {r.missionary}
+                              </div>
+                            )}
+
+                            {r.content && (
+                              <div style={{ fontSize: 13, marginTop: 6 }} className="muted">
+                                {r.content.length > 180 ? r.content.slice(0, 180) + "…" : r.content}
+                              </div>
+                            )}
+
+                            {/* PDF attachment — PUBLIC link */}
+                            {r.file_url && (
+                              <div style={{ marginTop: 8 }}>
+                                <a
+                                  href={toPublicUploadUrl(r.file_url)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm"
+                                  style={{ color: "var(--brand-primary, #3673B6)", textDecoration: "underline" }}
+                                >
+                                  {r.file_name || r.title || "Open PDF"}
+                                </a>
+                                {r.file_mime && (
+                                  <div className="muted" style={{ fontSize: 12 }}>{r.file_mime}</div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Thumbnails — also public */}
+                            {Array.isArray(r.images) && r.images.length > 0 && (
+                              <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>
+                                {r.images.slice(0, 4).map((img, i) => {
+                                  const imgHref = toPublicUploadUrl(
+                                    img?.url || img?.path || img?.src || img?.file
+                                  );
+                                  return (
+                                    <img
+                                      key={img.id || i}
+                                      src={imgHref}
+                                      alt="report"
+                                      style={{
+                                        width: 72,
+                                        height: 56,
+                                        objectFit: "cover",
+                                        borderRadius: 6,
+                                        border: "1px solid var(--border)",
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </aside>
     </div>
   );

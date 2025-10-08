@@ -6,23 +6,19 @@ const RENDER_BACKEND = "https://missionlink-mvp.onrender.com";
 
 /**
  * Resolve a safe "origin" base (no trailing slash, no trailing /api).
- * - Prod: take absolute from env and normalize.
- * - Vercel + missing/relative env: use absolute Render origin.
- * - Dev (localhost): return "" to use same-origin.
+ * - Prefers SAME-ORIGIN calls so Vercel rewrites handle API proxying (avoids CORS).
+ * - If an absolute env URL is given, normalize and use it.
  */
 function resolveBase() {
-  let base = (API_BASE_ENV || "").trim();
-
+  const base = (API_BASE_ENV || "").trim();
   const isAbsolute = /^https?:\/\//i.test(base);
-  const onVercel =
-    typeof window !== "undefined" && /\.vercel\.app$/i.test(window.location.hostname);
 
-  if (!base || (base && !isAbsolute)) {
-    // If env missing/relative, prefer absolute Render in prod; same-origin in dev.
-    return onVercel ? RENDER_BACKEND : "";
+  // ✅ Use same-origin when env is empty or relative
+  if (!base || !isAbsolute) {
+    return "";
   }
 
-  // Normalize: strip trailing slashes and trailing /api
+  // Absolute: normalize trailing slashes and trailing /api
   return base.replace(/\/+$/, "").replace(/\/api$/i, "");
 }
 
