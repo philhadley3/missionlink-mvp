@@ -1,9 +1,10 @@
 // src/pages/GlobeView.jsx
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Globe from "react-globe.gl";
 import { feature as topoFeature } from "topojson-client";
 import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
+import { geoCentroid } from "d3-geo"; // ➕ for smooth fly-to
 import { useAuth } from "../context/AuthContext.jsx";
 import { api } from "../lib/api";
 import { toPublicUploadUrl } from "../lib/fileUrls";
@@ -27,6 +28,9 @@ export default function GlobeView() {
   const [active, setActive] = useState(null); // { name, iso2, loading, error, missionaries, reports }
   const [hovered, setHovered] = useState(null);
   const [activeId, setActiveId] = useState(null);
+
+  // ➕ Search UI state
+  const [query, setQuery] = useState("");
 
   // Auth-aware token handling (refresh + retry once)
   const [authToken, setAuthToken] = useState(token);
@@ -168,7 +172,7 @@ export default function GlobeView() {
   // ------------------------------------
 
   // (Optional) detail hydration cache
-  const [hydrating, setHydrating] = useState(false);
+  const [hydrating] = useState(false);
   const detailCacheRef = useRef(new Map());
   function getIds(m) {
     const missionaryId = m?.missionary_id ?? m?.id ?? m?.missionary?.id ?? null;
@@ -232,9 +236,165 @@ export default function GlobeView() {
     }
   };
 
+  // =========================
+  // ➕ SEARCH: name → ISO2 → feature
+  // =========================
+
+  // Map feature id (numeric string) → feature
+  const idToFeature = useMemo(() => {
+    const m = new Map();
+    for (const f of polygonsData || []) {
+      const id = String(f?.id ?? "").padStart(3, "0");
+      if (id && id !== "-99") m.set(id, f);
+    }
+    return m;
+  }, [polygonsData]);
+
+  // Build name → ISO2 (lowercased) map with a few common aliases
+  const nameToIso2 = useMemo(() => {
+    const map = new Map();
+    const names = countriesLib.getNames("en", { select: "official" }) || {};
+    for (const [iso, n] of Object.entries(names)) map.set(n.toLowerCase(), iso.toUpperCase());
+    [
+      ["usa", "US"],
+      ["u.s.", "US"],
+      ["united states", "US"],
+      ["uk", "GB"],
+      ["united kingdom", "GB"],
+      ["ivory coast", "CI"],
+      ["south korea", "KR"],
+      ["north korea", "KP"],
+      ["vietnam", "VN"],
+      ["laos", "LA"],
+      ["czech republic", "CZ"],
+      ["eswatini", "SZ"],
+      ["north macedonia", "MK"],
+      ["syria", "SY"],
+      ["dr congo", "CD"],
+      ["congo kinshasa", "CD"],
+      ["congo brazzaville", "CG"],
+    ].forEach(([n, iso]) => map.set(n, iso));
+    return map;
+  }, []);
+
+  // List of display names for <datalist>
+  const countryNames = useMemo(() => {
+    const names = countriesLib.getNames("en", { select: "official" }) || {};
+    return Object.values({
+      ...names,
+      US: "United States",
+      GB: "United Kingdom",
+      CZ: "Czechia",
+      CD: "Congo (Kinshasa)",
+      CG: "Congo (Brazzaville)",
+      CI: "Côte d’Ivoire",
+      KR: "South Korea",
+      KP: "North Korea",
+      SZ: "Eswatini",
+      MK: "North Macedonia",
+      LA: "Laos",
+      VN: "Vietnam",
+      SY: "Syria",
+    });
+  }, []);
+
+  // Fly camera to the feature’s centroid (best-effort)
+  const flyToFeature = useCallback((feature) => {
+    if (!feature) return;
+    try {
+      const [lng, lat] = geoCentroid(feature);
+      globeEl.current?.pointOfView({ lat, lng, altitude: 1.5 }, 800);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const selectByName = useCallback((raw) => {
+    if (!raw) return;
+    const name = raw.trim().toLowerCase();
+    if (!name) return;
+
+    // 1) Exact/alias name → ISO2
+    let iso2 = nameToIso2.get(name) || null;
+
+    // 2) Loose contains match if not exact (e.g., "united stat")
+    if (!iso2) {
+      for (const [n, i] of nameToIso2.entries()) {
+        if (n.includes(name)) { iso2 = i; break; }
+      }
+    }
+
+    // 3) If user typed ISO2 directly
+    if (!iso2 && raw.length <= 3) {
+      const maybeIso = raw.toUpperCase();
+      if (/^[A-Z]{2}$/.test(maybeIso)) iso2 = maybeIso;
+    }
+
+    // 4) ISO2 -> numeric id -> feature
+    let feature = null;
+    if (iso2) {
+      const numeric = countriesLib.alpha2ToNumeric(iso2);
+      const id = String(numeric || "").padStart(3, "0");
+      feature = idToFeature.get(id) || null;
+    }
+
+    // 5) Last-ditch: search polygon props (some builds include NAME/ADMIN)
+    if (!feature) {
+      feature = (polygonsData || []).find((f) => {
+        const n = (f.properties?.NAME || f.properties?.ADMIN || "").toLowerCase();
+        return n === name || (name.length >= 3 && n.includes(name));
+      }) || null;
+    }
+
+    if (feature) {
+      flyToFeature(feature);
+      handleCountryClick(feature);
+    }
+  }, [nameToIso2, idToFeature, polygonsData, flyToFeature]);
+
+  // =========================
+
   return (
     // Page area below the fixed navbar (h-16). This wrapper fills the viewport minus 64px.
     <div className="relative min-h-[calc(100vh-4rem)] bg-white">
+      {/* Search overlay centered over the globe column (excludes sidebar on md+) */}
+      <div className="pointer-events-none absolute top-4 left-0 right-0 md:right-[380px] z-50">
+        <div className="flex justify-center">
+          <form
+            className="pointer-events-auto flex items-center gap-2 rounded-2xl bg-white/90 px-3 py-2 shadow-md backdrop-blur"
+            onSubmit={(e) => {
+              e.preventDefault();
+              selectByName(query);
+            }}
+          >
+            <input
+              type="text"
+              list="country-list"
+              inputMode="search"
+              placeholder="Search country…"
+              className="w-72 bg-transparent outline-none"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") selectByName(query);
+              }}
+              aria-label="Search country by name"
+            />
+            <button
+              type="submit"
+              className="rounded-xl border px-3 py-1 text-sm hover:bg-gray-50"
+            >
+              Go
+            </button>
+            <datalist id="country-list">
+              {countryNames.sort((a, b) => a.localeCompare(b)).map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+          </form>
+        </div>
+      </div>
+
       {/* Globe area — on desktop, reserve room for the fixed sidebar using right padding */}
       <div className="h-[calc(100vh-4rem)] md:pr-[380px] overflow-hidden">
         <div className="w-full h-full flex items-center justify-center relative z-10">
@@ -242,8 +402,7 @@ export default function GlobeView() {
             ref={globeEl}
             globeImageUrl="https://unpkg.com/three-globe/example/img/earth-day.jpg"
             bumpImageUrl={EARTH_BUMP}
-backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
-
+            backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
             rendererConfig={{ antialias: true, alpha: true }}
             width={undefined}
             height={undefined}
@@ -259,7 +418,10 @@ backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
             polygonStrokeColor={(d) => (d === hovered || d?.id === activeId ? AFL_STROKE : "#000000")}
             polygonStrokeWidth={1.0}
             onPolygonHover={setHovered}
-            onPolygonClick={handleCountryClick}
+            onPolygonClick={(f) => {
+              flyToFeature(f);
+              handleCountryClick(f);
+            }}
           />
         </div>
       </div>
@@ -284,7 +446,7 @@ backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
           {!active && (
             <div>
               <h3 style={{ marginTop: 0 }}>Select a country</h3>
-              <p className="muted">Click a country to view assigned missionaries.</p>
+              <p className="muted">Click a country or use the search to view assigned missionaries.</p>
             </div>
           )}
 

@@ -5,6 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_migrate import Migrate
 import os
 import re
 import traceback
@@ -32,11 +33,10 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
 
     # Database
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///missionlink.db')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///missionlink.db")
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # --- CORS for frontend (dev + prod) --------------------------------------
-    # Base allowlist
     cors_origins = {
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -44,10 +44,8 @@ def create_app():
         "http://127.0.0.1:3000",
         "https://missionlink.anchorsforlife.org",
     }
-    # Allow all Vercel preview domains (e.g. https://yourapp.vercel.app)
     cors_regexes = [re.compile(r"^https://.*\.vercel\.app$")]
 
-    # Optional env override: CORS_ORIGINS="https://foo.com,https://bar.com"
     extra = os.getenv("CORS_ORIGINS", "").strip()
     if extra:
         for origin in [o.strip() for o in extra.split(",") if o.strip()]:
@@ -56,7 +54,7 @@ def create_app():
     CORS(
         app,
         resources={r"/api/*": {"origins": list(cors_origins) + cors_regexes}},
-        supports_credentials=True,  # safe even if you use header-based JWT
+        supports_credentials=True,
         allow_headers=["Content-Type", "Authorization"],
         expose_headers=["Content-Type", "Authorization"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -65,26 +63,27 @@ def create_app():
     # --- Init extensions ------------------------------------------------------
     db.init_app(app)
     jwt.init_app(app)
+    Migrate(app, db)
 
-    # Import models so db.create_all() sees them
-    from .models import User, Missionary, Country, Assignment, Report  # noqa
+    # Import models AFTER db.init_app to avoid circular imports
+    from . import models     # all models in app/models.py
+    from . import country    # the Country model in app/country.py
 
-    with app.app_context():
-        db.create_all()
+    # Register CLI commands
+    from .cli import sync_countries
+    app.cli.add_command(sync_countries)
 
     # --- Static uploads (configurable/persistent) -----------------------------
-    DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
-    upload_dir = os.path.abspath(os.getenv('UPLOAD_DIR', DEFAULT_UPLOAD_DIR))
+    DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+    upload_dir = os.path.abspath(os.getenv("UPLOAD_DIR", DEFAULT_UPLOAD_DIR))
     os.makedirs(upload_dir, exist_ok=True)
     app.config["UPLOAD_FOLDER"] = upload_dir
 
-    # Serve files under /api/files/<filename> with GET/HEAD/OPTIONS
-    @app.route('/api/files/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
+    @app.route("/api/files/<path:filename>", methods=["GET", "HEAD", "OPTIONS"])
     def api_files(filename):
         return send_from_directory(upload_dir, filename, as_attachment=False)
 
-    # Legacy path for anything still linking to /uploads/...
-    @app.route('/uploads/<path:filename>', methods=["GET", "HEAD", "OPTIONS"])
+    @app.route("/uploads/<path:filename>", methods=["GET", "HEAD", "OPTIONS"])
     def uploads(filename):
         return send_from_directory(upload_dir, filename, as_attachment=False)
 
@@ -137,6 +136,6 @@ def create_app():
 
     # --- API routes -----------------------------------------------------------
     from .routes import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(api_bp, url_prefix="/api")
 
     return app

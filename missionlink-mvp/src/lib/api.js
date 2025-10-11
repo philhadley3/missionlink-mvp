@@ -76,3 +76,57 @@ export async function api(
 
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// 🔹 Country helpers
+// ---------------------------------------------------------------------------
+
+function countryCodeToFlag(alpha2) {
+  if (!alpha2 || alpha2.length !== 2) return "";
+  const up = alpha2.toUpperCase();
+  // Regional Indicator Symbols: A -> U+1F1E6
+  return [...up].map(c => String.fromCodePoint(0x1f1e6 + (c.charCodeAt(0) - 65))).join("");
+}
+
+function normalizeCountry(c = {}) {
+  const alpha2 =
+    (c.alpha2 || c.iso2 || c.code || "").toString().trim().toUpperCase();
+  const alpha3 =
+    (c.alpha3 || c.iso3 || "").toString().trim().toUpperCase();
+  const numeric =
+    (c.numeric ?? c.numeric_code ?? "").toString().trim() || null;
+
+  return {
+    id: c.id ?? null,
+    name: c.name || c.common_name || c.official_name || "",
+    official_name: c.official_name || c.name || "",
+    alpha2,
+    alpha3,
+    numeric,
+    flag: c.flag || (alpha2 ? countryCodeToFlag(alpha2) : ""),
+    alt_names: Array.isArray(c.alt_names) ? c.alt_names : [],
+    // keep any extra fields if present
+    ...(c.population !== undefined ? { population: c.population } : {}),
+    ...(c.christian_percentage !== undefined
+      ? { christian_percentage: c.christian_percentage }
+      : {}),
+  };
+}
+
+/**
+ * Fetch list of all countries from the backend.
+ * Always returns a normalized shape:
+ *   { id, name, official_name, alpha2, alpha3, numeric, flag, alt_names? }
+ */
+export async function fetchCountries() {
+  const raw = await api("/api/countries");
+  return Array.isArray(raw) ? raw.map(normalizeCountry) : [];
+}
+
+// Expose in dev console for quick testing (keep at the BOTTOM)
+if (typeof window !== "undefined") {
+  window.__API_BASE = API_BASE;          // ensure present even if earlier block changes
+  window.fetchCountries = fetchCountries; // expose helper globally
+  // version ping so you can confirm the right bundle is live
+  console.log("[api] fetchCountries exposed v2025-10-11d", { API_BASE });
+}

@@ -1,3 +1,4 @@
+// src/pages/MissionaryDashboard.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { useAuth } from "@/context/AuthContext.jsx";
 import countriesLib from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 countriesLib.registerLocale(enLocale);
-import { api, API_BASE } from "../lib/api";
+import { api, API_BASE, fetchCountries } from "../lib/api"; // ✅ include fetchCountries
 import { toBackendUrl, toPublicUploadUrl } from "../lib/fileUrls";
 
 /**
@@ -24,22 +25,6 @@ import { toBackendUrl, toPublicUploadUrl } from "../lib/fileUrls";
  */
 
 // --- Utilities ---------------------------------------------------------------
-const COUNTRIES = [
-  "Afghanistan","Albania","Algeria","Angola","Argentina","Armenia","Australia","Austria","Azerbaijan",
-  "Bangladesh","Belarus","Belgium","Benin","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Bulgaria",
-  "Cambodia","Cameroon","Canada","Chile","China","Colombia","Congo","Costa Rica","Croatia","Cuba","Cyprus","Czechia",
-  "Denmark","Dominican Republic","Ecuador","Egypt","El Salvador","Estonia","Ethiopia",
-  "Finland","France","Gabon","Georgia","Germany","Ghana","Greece","Guatemala",
-  "Haiti","Honduras","Hungary","Iceland","India","Indonesia","Iran","Iraq","Ireland","Israel","Italy",
-  "Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kuwait","Kyrgyzstan",
-  "Laos","Latvia","Lebanon","Liberia","Libya","Lithuania","Luxembourg",
-  "Madagascar","Malawi","Malaysia","Mali","Mexico","Moldova","Mongolia","Montenegro","Morocco","Mozambique",
-  "Namibia","Nepal","Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Macedonia","Norway",
-  "Pakistan","Panama","Paraguay","Peru","Philippines","Poland","Portugal","Qatar",
-  "Romania","Russia","Rwanda","Saudi Arabia","Senegal","Serbia","Sierra Leone","Singapore","Slovakia","Slovenia","Somalia","South Africa","South Korea","South Sudan","Spain","Sri Lanka","Sudan","Sweden","Switzerland","Syria",
-  "Taiwan","Tajikistan","Tanzania","Thailand","Togo","Tunisia","Turkey","Turkmenistan","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Venezuela","Vietnam","Zambia","Zimbabwe",
-];
-
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -188,20 +173,107 @@ function ProfileCard({ profile, onChange, onSave, saving, canSave }) {
   );
 }
 
+// ✅ Drop-in replacement for CountriesCard
+
+function normalize(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/['’.]/g, " ")
+    .replace(/\b(the|and|of|de|la|le)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function swapCommaName(name) {
+  const m = String(name || "").match(/^\s*([^,]+)\s*,\s*(.+)\s*$/);
+  if (!m) return null;
+  return `${m[2]} ${m[1]}`;
+}
+
+function buildAliasesForCountry(c) {
+  const aliases = new Set();
+
+  [c.name, c.official_name].filter(Boolean).forEach(n => aliases.add(n));
+  const swapped = swapCommaName(c.name) || swapCommaName(c.official_name);
+  if (swapped) aliases.add(swapped);
+  if (Array.isArray(c.alt_names)) c.alt_names.forEach(n => n && aliases.add(n));
+  if (c.alpha2) aliases.add(c.alpha2);
+  if (c.alpha3) aliases.add(c.alpha3);
+
+  // Helpful heuristics
+  if (c.alpha2 === "CD") {
+    ["DRC","DR Congo","Democratic Republic of Congo","Congo Kinshasa","Congo-Kinshasa"].forEach(n => aliases.add(n));
+  }
+  if (c.alpha2 === "KN") {
+    ["St Kitts","St. Kitts","St Kitts and Nevis","Saint Kitts & Nevis","St Kitts & Nevis"].forEach(n => aliases.add(n));
+  }
+
+  return aliases;
+}
+
 function CountriesCard({ countries, onChange, onSave, saving, canSave }) {
   const [query, setQuery] = useState("");
-  const filtered = useMemo(
-    () => COUNTRIES.filter(c => c.toLowerCase().includes(query.toLowerCase())).slice(0, 12),
-    [query]
-  );
+  const [catalog, setCatalog] = useState([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [errorCatalog, setErrorCatalog] = useState("");
 
-  function addCountry(name) {
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoadingCatalog(true);
+        // Primary path: import helper
+        let rows = [];
+        try {
+          if (typeof fetchCountries === "function") {
+            rows = await fetchCountries();
+          }
+        } catch (e) {
+          // ignore and try window fallback
+        }
+        // Fallback: window helper (ensures it works even if tree-shaken)
+        if ((!rows || rows.length === 0) && typeof window !== "undefined" && typeof window.fetchCountries === "function") {
+          rows = await window.fetchCountries();
+        }
+        if (!Array.isArray(rows)) rows = [];
+
+        if (alive) {
+          const sorted = rows.slice().sort((a, b) => a.name.localeCompare(b.name));
+          setCatalog(sorted);
+          console.log(`[CountriesCard] catalog loaded: ${sorted.length} countries`);
+        }
+      } catch (err) {
+        console.error(err);
+        if (alive) setErrorCatalog(err?.message || "Failed to load countries");
+      } finally {
+        if (alive) setLoadingCatalog(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const filtered = useMemo(() => {
+    const qn = normalize(query);
+    if (!qn) return [];
+    return catalog
+      .filter((c) => {
+        const aliases = buildAliasesForCountry(c);
+        for (const a of aliases) {
+          if (normalize(a).includes(qn)) return true;
+        }
+        return false;
+      })
+      .slice(0, 12);
+  }, [query, catalog]);
+
+  function addCountryByName(name) {
     if (!countries.includes(name)) onChange([...countries, name]);
     setQuery("");
   }
-
   function removeCountry(name) {
-    onChange(countries.filter(c => c !== name));
+    onChange(countries.filter((c) => c !== name));
   }
 
   return (
@@ -210,25 +282,55 @@ function CountriesCard({ countries, onChange, onSave, saving, canSave }) {
         <CardTitle>Countries Served</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <SectionHeader icon={Globe2} title="Select countries" description="Choose one or more countries where you serve." />
+        <SectionHeader
+          icon={Globe2}
+          title="Select countries"
+          description={
+            loadingCatalog
+              ? "Loading country list…"
+              : errorCatalog
+              ? "Could not load countries. Try reloading."
+              : `Search across ${catalog.length} countries.`
+          }
+        />
         <div className="space-y-3">
           <div className="relative">
             <Input
               placeholder="Search countries to add…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              disabled={loadingCatalog || !!errorCatalog}
             />
-            {query && (
-              <div className="absolute z-20 mt-1 w-full rounded-xl border bg-popover p-2 shadow">
+            {query && !loadingCatalog && !errorCatalog && (
+              <div className="absolute z-50 mt-1 w-full rounded-xl border bg-popover p-2 shadow max-h-72 overflow-auto">
                 {filtered.length === 0 && (
-                  <div className="px-2 py-1 text-sm text-muted-foreground">No matches</div>
+                  <div className="px-2 py-1 text-sm text-muted-foreground">
+                    No matches
+                  </div>
                 )}
-                {filtered.map((name) => (
-                  <Button key={name} variant="ghost" className="w-full justify-start" onClick={() => addCountry(name)}>
-                    <Plus className="w-4 h-4 mr-2" /> {name}
+                {filtered.map((c) => (
+                  <Button
+                    key={c.alpha2}
+                    variant="ghost"
+                    className="w-full justify-start"
+                    onClick={() => addCountryByName(c.name)}
+                    title={`${c.alpha2}${c.alpha3 ? ` • ${c.alpha3}` : ""}`}
+                  >
+                    <span className="mr-2">{c.flag || ""}</span> {c.name}
                   </Button>
                 ))}
               </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {!loadingCatalog && !errorCatalog && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5">
+                Catalog: {catalog.length}
+              </span>
+            )}
+            {errorCatalog && (
+              <span className="text-red-600">{errorCatalog}</span>
             )}
           </div>
 
@@ -266,6 +368,7 @@ function CountriesCard({ countries, onChange, onSave, saving, canSave }) {
     </Card>
   );
 }
+
 
 function ReportsCard({ countries, reports, onAddReport, onDeleteReport, creating }) {
   const [form, setForm] = useState({ country: "", title: "", content: "", images: [], pdf: null });
@@ -694,6 +797,63 @@ export default function MissionaryDashboard() {
     JSON.stringify([...(countries || [])].sort()) !==
     JSON.stringify([...(originalCountries || [])].sort());
 
+  // ✅ UPDATED: robust save using the live catalog (with fallback to i18n-iso-countries)
+  async function saveCountries() {
+    try {
+      setSavingCountries(true);
+
+      // Build a resolver map from the live catalog
+      const catalog = await fetchCountries();
+      const byName = new Map();      // canonical/official/alt name -> alpha2
+      const byAlpha2 = new Set();    // track valid codes quickly
+      const nameByA2 = new Map();    // alpha2 -> display name
+
+      for (const c of catalog) {
+        byAlpha2.add(c.alpha2);
+        nameByA2.set(c.alpha2, c.name);
+        const names = new Set([
+          c.name,
+          c.official_name,
+          ...(Array.isArray(c.alt_names) ? c.alt_names : []),
+        ].filter(Boolean));
+        for (const n of names) {
+          byName.set(n.toLowerCase(), c.alpha2);
+        }
+      }
+
+      // Convert UI names -> ISO2 (prefer our catalog; fallback to i18n-iso-countries)
+      const isoList = (countries || [])
+        .map((name) => {
+          const key = String(name).trim().toLowerCase();
+          let a2 = byName.get(key);
+          if (!a2) {
+            const fallback = countriesLib.getAlpha2Code(name, "en");
+            if (fallback && byAlpha2.has(fallback.toUpperCase())) a2 = fallback.toUpperCase();
+          }
+          return a2;
+        })
+        .filter(Boolean);
+
+      const saved = await callApi("/api/me/assignments", {
+        method: "PUT",
+        body: { countries: isoList },
+      });
+
+      // Convert any returned ISO2 codes back to display names for UI
+      const returned = saved?.countries || isoList;
+      const nextNames = returned.map((code) => nameByA2.get(String(code).toUpperCase()) || code);
+
+      setCountries(nextNames);
+      setOriginalCountries(nextNames);
+      toast.success("Countries saved");
+    } catch (err) {
+      console.error(err);
+      toast.error(`Save failed: ${err.message}`);
+    } finally {
+      setSavingCountries(false);
+    }
+  }
+
   async function saveProfile() {
     try {
       setSavingProfile(true);
@@ -713,40 +873,6 @@ export default function MissionaryDashboard() {
       toast.error(`Save failed: ${err.message}`);
     } finally {
       setSavingProfile(false);
-    }
-  }
-
-  async function saveCountries() {
-    try {
-      setSavingCountries(true);
-
-      // Convert UI names -> ISO2 codes (upper-case)
-      const isoList = (countries || [])
-        .map((name) => countriesLib.getAlpha2Code(name, "en"))
-        .filter(Boolean)
-        .map((c) => c.toUpperCase());
-
-      const saved = await callApi("/api/me/assignments", {
-        method: "PUT",
-        body: { countries: isoList },
-      });
-
-      // Convert any returned ISO2 codes back to names for UI
-      const returned = saved?.countries || isoList;
-      const nextNames = returned.map((v) =>
-        typeof v === "string" && v.length === 2
-          ? (countriesLib.getName(v.toUpperCase(), "en") || v)
-          : v
-      );
-
-      setCountries(nextNames);
-      setOriginalCountries(nextNames);
-      toast.success("Countries saved");
-    } catch (err) {
-      console.error(err);
-      toast.error(`Save failed: ${err.message}`);
-    } finally {
-      setSavingCountries(false);
     }
   }
 

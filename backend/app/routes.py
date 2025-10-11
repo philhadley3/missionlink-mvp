@@ -7,7 +7,8 @@ from PIL import Image, UnidentifiedImageError
 import pycountry
 
 from . import db
-from .models import User, Missionary, Country, Assignment, Report, ReportImage
+from .models import User, Missionary, Assignment, Report, ReportImage
+from .country import Country
 
 api_bp = Blueprint('api', __name__)
 
@@ -15,24 +16,53 @@ api_bp = Blueprint('api', __name__)
 def _normalize_iso2(iso2):
     return (iso2 or '').strip().upper()
 
-def _country_name_from_iso2(iso2):
+def _country_name_from_alpha2(alpha2):
     try:
-        c = pycountry.countries.get(alpha_2=iso2)
+        c = pycountry.countries.get(alpha_2=alpha2)
         return c.name if c else None
     except Exception:
         return None
 
-def _ensure_country(iso2):
-    iso2 = _normalize_iso2(iso2)
-    if not iso2:
+def _flag_from_alpha2(alpha2: str) -> str:
+    try:
+        return ''.join(chr(0x1F1E6 + (ord(c) - ord('A'))) for c in alpha2.upper())
+    except Exception:
         return None
-    c = Country.query.filter_by(iso2=iso2).first()
-    if c:
-        return c
-    name = _country_name_from_iso2(iso2) or iso2
-    c = Country(iso2=iso2, name=name, region=None, population=None, christian_percentage=None)
-    db.session.add(c); db.session.commit()
-    return c
+
+def _ensure_country(alpha2: str):
+    """Return Country row for alpha2; create minimally from pycountry if not present."""
+    alpha2 = _normalize_iso2(alpha2)
+    if not alpha2:
+        return None
+
+    row = Country.query.filter_by(alpha2=alpha2).first()
+    if row:
+        return row
+
+    # Best-effort create from pycountry (should be rare since you seeded 249 rows)
+    pc = pycountry.countries.get(alpha_2=alpha2)
+    if not pc:
+        # fallback minimal
+        name = alpha2
+        row = Country(name=name, official_name=None, alpha2=alpha2,
+                      alpha3=None, numeric=None, flag_emoji=_flag_from_alpha2(alpha2))
+        db.session.add(row); db.session.commit()
+        return row
+
+    name = pc.name
+    off = getattr(pc, "official_name", None)
+    a3 = getattr(pc, "alpha_3", None)
+    num = getattr(pc, "numeric", None)
+    row = Country(
+        name=name,
+        official_name=off,
+        alpha2=alpha2,
+        alpha3=a3,
+        numeric=num,
+        flag_emoji=_flag_from_alpha2(alpha2),
+    )
+    db.session.add(row); db.session.commit()
+    return row
 
 # ---------- auth ----------
 @api_bp.route('/auth/register', methods=['POST'])
@@ -67,29 +97,34 @@ def login():
 @api_bp.route('/countries', methods=['GET'])
 def list_countries():
     countries = Country.query.order_by(Country.name).all()
-    return jsonify([{
-        'id': c.id, 'iso2': c.iso2, 'name': c.name, 'region': c.region,
-        'population': c.population, 'christian_percentage': c.christian_percentage
-    } for c in countries])
+    # Use model's to_dict() so fields match your Country model
+    return jsonify([c.to_dict() for c in countries])
 
 @api_bp.route('/countries/all', methods=['GET'])
 def list_all_iso_countries():
     out = []
     for c in list(pycountry.countries):
-        iso2 = getattr(c, 'alpha_2', None)
-        if not iso2:
+        alpha2 = getattr(c, 'alpha_2', None)
+        if not alpha2:
             continue
-        out.append({'iso2': iso2, 'name': c.name})
+        out.append({'alpha2': alpha2, 'name': c.name})
     out.sort(key=lambda x: x['name'])
     return jsonify(out)
 
-@api_bp.route('/countries/<iso2>/missionaries', methods=['GET'])
-def missionaries_by_country(iso2):
-    c = _ensure_country(iso2)
+@api_bp.route('/countries/<alpha2>/missionaries', methods=['GET'])
+def missionaries_by_country(alpha2):
+    alpha2 = _normalize_iso2(alpha2)
+    c = _ensure_country(alpha2)
+    if not c:
+        return jsonify([])
+
+    # Find missionaries with an assignment for this alpha2
+    assigns = Assignment.query.filter_by(country_alpha2=alpha2).all()
     out = []
-    for a in c.assignments:
+    for a in assigns:
         m = a.missionary
-        # pull the linked user email
+        if not m:
+            continue
         u = m.user if hasattr(m, "user") else User.query.get(m.user_id) if getattr(m, "user_id", None) else None
         out.append({
             'id': m.id,
@@ -102,14 +137,26 @@ def missionaries_by_country(iso2):
         })
     return jsonify(out)
 
-@api_bp.route('/countries/<iso2>/reports', methods=['GET'])
-def reports_by_country(iso2):
-    c = _ensure_country(iso2)
-    reps = Report.query.filter_by(country_id=c.id).order_by(Report.created_at.desc()).limit(50).all()
+@api_bp.route('/countries/<alpha2>/reports', methods=['GET'])
+def reports_by_country(alpha2):
+    alpha2 = _normalize_iso2(alpha2)
+    c = _ensure_country(alpha2)
+    if not c:
+        return jsonify([])
+
+    # Reports by missionaries assigned to this country
+    assigns = Assignment.query.filter_by(country_alpha2=alpha2).all()
+    missionary_ids = [a.missionary_id for a in assigns if a.missionary_id]
+    if not missionary_ids:
+        return jsonify([])
+
+    reps = Report.query.filter(Report.missionary_id.in_(missionary_ids)) \
+                       .order_by(Report.created_at.desc()) \
+                       .limit(50).all()
     return jsonify([{
         'id': r.id, 'title': r.title, 'content': r.content,
         'created_at': r.created_at.isoformat(),
-        'missionary': r.missionary.display_name,
+        'missionary': (r.missionary.display_name if r.missionary else None),
         'file_url': r.file_url, 'file_name': r.file_name, 'file_mime': r.file_mime,
         'images': [{'id': img.id, 'url': img.url, 'mime': img.mime, 'name': img.name, 'width': img.width, 'height': img.height}
                    for img in r.images]
@@ -125,13 +172,13 @@ def me():
     if not u: return jsonify({'error':'user not found'}), 401
     m = u.missionary
     assigned = Assignment.query.filter_by(missionary_id=m.id).all() if m else []
-    assigned_iso2 = [a.country.iso2 for a in assigned]
+    assigned_alpha2 = [a.country_alpha2 for a in assigned]
     return jsonify({
         'id': u.id, 'email': u.email, 'role': u.role,
         'missionary': ({
             'id': m.id, 'display_name': m.display_name, 'organization': m.organization,
             'bio': m.bio, 'website': m.website, 'avatar_url': m.avatar_url,
-            'assigned_iso2': assigned_iso2
+            'assigned_alpha2': assigned_alpha2
         } if m else None)
     })
 
@@ -241,7 +288,7 @@ def get_assignments():
     u = User.query.get(int(user_id))
     if not u or not u.missionary: return jsonify([])
     assigned = Assignment.query.filter_by(missionary_id=u.missionary.id).all()
-    return jsonify([a.country.iso2 for a in assigned])
+    return jsonify([a.country_alpha2 for a in assigned])
 
 @api_bp.route('/me/assignments', methods=['PUT'])
 @jwt_required()
@@ -260,33 +307,32 @@ def set_assignments():
         return jsonify({'error':'countries must be an array of ISO2 codes'}), 400
 
     # Normalize & ensure countries exist
-    wanted_iso = []
+    wanted_alpha2 = []
     for raw in iso_list:
-        iso = _normalize_iso2(raw)
-        if not iso:
+        alpha2 = _normalize_iso2(raw)
+        if not alpha2:
             continue
-        c = _ensure_country(iso)
+        c = _ensure_country(alpha2)
         if c:
-            wanted_iso.append(iso)
+            wanted_alpha2.append(alpha2)
 
     # Current assignments
     current = Assignment.query.filter_by(missionary_id=u.missionary.id).all()
-    current_iso = {a.country.iso2: a for a in current}
+    current_by_alpha2 = {a.country_alpha2: a for a in current if a.country_alpha2}
 
     # Add missing
-    for iso in wanted_iso:
-        if iso not in current_iso:
-            c = Country.query.filter_by(iso2=iso).first()
-            db.session.add(Assignment(missionary_id=u.missionary.id, country_id=c.id))
+    for alpha2 in wanted_alpha2:
+        if alpha2 not in current_by_alpha2:
+            db.session.add(Assignment(missionary_id=u.missionary.id, country_alpha2=alpha2))
 
     # Remove extra
-    wanted_set = set(wanted_iso)
-    for iso, a in current_iso.items():
-        if iso not in wanted_set:
+    wanted_set = set(wanted_alpha2)
+    for alpha2, a in current_by_alpha2.items():
+        if alpha2 not in wanted_set:
             db.session.delete(a)
 
     db.session.commit()
-    return jsonify({'message': 'assignments_updated', 'countries': wanted_iso})
+    return jsonify({'message': 'assignments_updated', 'countries': wanted_alpha2})
 
 # ---------- file helpers (mounted disk + /api/files URLs) ----------
 def _upload_dir() -> str:
@@ -384,25 +430,25 @@ def create_report():
 
     is_multipart = request.content_type and 'multipart/form-data' in request.content_type
     if is_multipart:
-        country_iso2 = _normalize_iso2(request.form.get('country_iso2'))
+        country_alpha2 = _normalize_iso2(request.form.get('country_iso2'))  # keep param name but normalize to alpha2
         title = request.form.get('title') or 'Update'
         content = request.form.get('content') or ''
         doc_file = request.files.get('file')
         image_files = request.files.getlist('images')
     else:
         data = request.get_json() or {}
-        country_iso2 = _normalize_iso2(data.get('country_iso2'))
+        country_alpha2 = _normalize_iso2(data.get('country_iso2'))
         title = data.get('title') or 'Update'
         content = data.get('content') or ''
         doc_file = None
         image_files = []
 
     # ENFORCE: only allowed to report for assigned countries
-    assigned_iso = [a.country.iso2 for a in Assignment.query.filter_by(missionary_id=u.missionary.id).all()]
-    if country_iso2 not in assigned_iso:
+    assigned_alpha2 = [a.country_alpha2 for a in Assignment.query.filter_by(missionary_id=u.missionary.id).all()]
+    if country_alpha2 not in assigned_alpha2:
         return jsonify({'error': 'not_assigned_to_country'}), 403
 
-    c = _ensure_country(country_iso2)
+    c = _ensure_country(country_alpha2)
     if not c:
         return jsonify({'error': 'unknown country'}), 400
 
@@ -413,7 +459,8 @@ def create_report():
             return jsonify({'error': 'unsupported file type'}), 400
         file_url, file_mime, file_name = saved
 
-    r = Report(missionary_id=u.missionary.id, country_id=c.id,
+    # Note: Report model has no country_id; it's linked via missionary assignment context
+    r = Report(missionary_id=u.missionary.id,
                title=title, content=content,
                file_url=file_url, file_mime=file_mime, file_name=file_name)
     db.session.add(r); db.session.commit()
