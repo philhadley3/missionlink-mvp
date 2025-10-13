@@ -33,7 +33,6 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
 
     # --- Access Code (env-driven) --------------------------------------------
-    # Require ACCESS_CODE in production; provide a dev default locally.
     if flask_env == "production" and not os.getenv("ACCESS_CODE"):
         raise RuntimeError("ACCESS_CODE is required in production")
     app.config["ACCESS_CODE"] = os.getenv("ACCESS_CODE", "MISSION2025")
@@ -49,6 +48,7 @@ def create_app():
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://missionlink.anchorsforlife.org",
+        "https://missionlink-mvp.onrender.com",
     }
     cors_regexes = [re.compile(r"^https://.*\.vercel\.app$")]
 
