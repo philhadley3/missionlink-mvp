@@ -9,49 +9,11 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { api } from "../lib/api";
 import { toPublicUploadUrl } from "../lib/fileUrls";
 import * as THREE from "three";
-import CountrySearch from "../components/CountrySearch";
 
 countriesLib.registerLocale(enLocale);
 
 const AFL_STROKE = "#808080";
 const EARTH_BUMP = "https://unpkg.com/three-globe/example/img/earth-topology.png";
-
-// Common alternate names / aliases keyed by ISO2
-const ALT_NAME_MAP = {
-  CI: ["Cote d'Ivoire", "Côte d’Ivoire", "Ivory Coast"],
-  SZ: ["Eswatini", "Swaziland"],
-  CD: ["DRC", "Congo-Kinshasa", "Democratic Republic of the Congo"],
-  CG: ["Republic of the Congo", "Congo-Brazzaville"],
-  KR: ["South Korea", "Republic of Korea"],
-  KP: ["North Korea", "DPRK", "Democratic People's Republic of Korea"],
-  LA: ["Laos", "Lao PDR", "Lao People's Democratic Republic"],
-  MM: ["Myanmar", "Burma"],
-  CZ: ["Czechia", "Czech Republic"],
-  MK: ["North Macedonia", "Macedonia"],
-  TL: ["Timor-Leste", "East Timor"],
-  CV: ["Cabo Verde", "Cape Verde"],
-  TR: ["Türkiye", "Turkey"],
-  SY: ["Syria", "Syrian Arab Republic"],
-  RU: ["Russia", "Russian Federation"],
-  IR: ["Iran", "Islamic Republic of Iran"],
-  BO: ["Bolivia", "Bolivia (Plurinational State of)"],
-  VE: ["Venezuela", "Venezuela (Bolivarian Republic of)"],
-  MD: ["Moldova", "Republic of Moldova"],
-  TZ: ["Tanzania", "United Republic of Tanzania"],
-  BN: ["Brunei", "Brunei Darussalam"],
-  PS: ["Palestine", "State of Palestine", "Palestinian Territories"],
-  TW: ["Taiwan", "Republic of China"],
-  VA: ["Vatican City", "Holy See"],
-  GB: ["United Kingdom", "UK", "Great Britain", "Britain"],
-  US: ["United States", "USA", "US", "United States of America"],
-  AE: ["UAE", "United Arab Emirates"],
-  HK: ["Hong Kong SAR", "Hong Kong"],
-  MO: ["Macao", "Macau", "Macao SAR"],
-  FM: ["Micronesia", "Federated States of Micronesia"],
-  KN: ["Saint Kitts and Nevis", "St Kitts and Nevis"],
-  VC: ["Saint Vincent and the Grenadines", "St Vincent and the Grenadines"],
-  ST: ["São Tomé and Príncipe", "Sao Tome and Principe"],
-};
 
 export default function GlobeView() {
   const globeEl = useRef();
@@ -69,7 +31,7 @@ export default function GlobeView() {
   const [active, setActive] = useState(null);
   const [hovered, setHovered] = useState(null);
   const [activeId, setActiveId] = useState(null);
-  const [activeCountryName, setActiveCountryName] = useState("");
+  const [query, setQuery] = useState("");
 
   // Auth helper
   const [authToken, setAuthToken] = useState(token);
@@ -224,7 +186,7 @@ export default function GlobeView() {
     if (material) material.bumpScale = 10;
   }, []);
 
-  // ---------- Lookup helpers ----------
+  // ---------- Search helpers ----------
 
   const idToFeature = useMemo(() => {
     const m = new Map();
@@ -235,24 +197,35 @@ export default function GlobeView() {
     return m;
   }, [polygonsData]);
 
-  // Build a search dataset with alt names
-  const countriesForSearch = useMemo(() => {
-    return (backendCountries || []).map((c) => {
-      const iso2 = (c?.iso2 || c?.ISO2 || c?.code || c?.iso || "").toString().trim().toUpperCase();
-      const iso3 = (c?.iso3 || c?.ISO3 || "").toString().trim().toUpperCase() || undefined;
-      const name = c?.name || c?.official_name || c?.short_name || c?.common_name || countriesLib.getName(iso2, "en") || iso2;
-      const fromBackendAliases = Array.isArray(c?.aliases) ? c.aliases : [];
-      const altFromMap = ALT_NAME_MAP[iso2] || [];
-      const alsoOfficial = c?.official_name && c.official_name !== name ? [c.official_name] : [];
-      return {
-        id: c?.id || iso2,
-        name,
-        iso2,
-        iso3,
-        altNames: [...fromBackendAliases, ...altFromMap, ...alsoOfficial].filter(Boolean),
-      };
-    });
-  }, [backendCountries]);
+  const nameToIso2 = useMemo(() => {
+    const map = new Map();
+    // prefer backend names
+    for (const c of backendCountries) {
+      const iso = (c?.iso2 || c?.ISO2 || c?.code || c?.iso || "").toString().trim().toUpperCase();
+      if (!/^[A-Z]{2}$/.test(iso)) continue;
+      const names = [
+        c?.name, c?.official_name, c?.short_name, c?.common_name,
+        ...(Array.isArray(c?.aliases) ? c.aliases : []),
+      ].filter(Boolean).map((s) => s.toString().trim()).filter((s) => s.length > 0);
+      names.forEach((n) => map.set(n.toLowerCase(), iso));
+    }
+    // fallback to lib names for visible polygons
+    const libNames = countriesLib.getNames("en", { select: "official" }) || {};
+    const visibleIso = new Set((countries || []).map((f) => getIso2FromFeature(f)).filter(Boolean));
+    for (const [iso, n] of Object.entries(libNames)) {
+      const ISO = iso.toUpperCase();
+      if (visibleIso.has(ISO)) map.set(n.toLowerCase(), ISO);
+    }
+    // Add all point-territories to search too
+    for (const p of territoryPoints) map.set(p.name.toLowerCase(), p.iso2);
+    return map;
+  }, [backendCountries, countries, territoryPoints]);
+
+  const countryNames = useMemo(() => {
+    const names = new Set();
+    for (const [n] of nameToIso2) names.add(n);
+    return [...names].map((n) => n.replace(/\b\w/g, (c) => c.toUpperCase()));
+  }, [nameToIso2]);
 
   // ---------- UI interactions ----------
 
@@ -291,30 +264,38 @@ export default function GlobeView() {
     handleCountryClick(f);
   }, [flyToFeature]);
 
-  const selectByISO = useCallback((iso2) => {
-    if (!iso2) return;
-    const numeric = countriesLib.alpha2ToNumeric(iso2);
-    const id = String(numeric || "").padStart(3, "0");
-    const feat = idToFeature.get(id) || null;
-    if (feat) {
-      flyToFeature(feat);
-      handleCountryClick(feat);
-      return;
+  const selectByName = useCallback((raw) => {
+    if (!raw) return;
+    const name = raw.trim().toLowerCase();
+    let iso2 = nameToIso2.get(name) || null;
+    if (!iso2) {
+      for (const [n, i] of nameToIso2.entries()) {
+        if (n.includes(name)) { iso2 = i; break; }
+      }
     }
-    // Fallback to point territory
-    const pt = territoryPoints.find((p) => p.iso2 === iso2);
-    if (pt) {
-      globeEl.current?.pointOfView({ lat: pt.lat, lng: pt.lng, altitude: 1.5 }, 800);
-      handlePointClick(pt);
+    if (!iso2 && raw.length <= 3) {
+      const maybeIso = raw.toUpperCase();
+      if (/^[A-Z]{2}$/.test(maybeIso)) iso2 = maybeIso;
     }
-  }, [idToFeature, territoryPoints, flyToFeature]);
 
-  const handlePick = useCallback((country) => {
-    if (!country) return;
-    setActiveCountryName(country.name || "");
-    const iso = (country.iso2 || "").toUpperCase();
-    if (iso) selectByISO(iso);
-  }, [selectByISO]);
+    // Try polygon first
+    if (iso2) {
+      const numeric = countriesLib.alpha2ToNumeric(iso2);
+      const id = String(numeric || "").padStart(3, "0");
+      const feat = idToFeature.get(id) || null;
+      if (feat) {
+        flyToFeature(feat);
+        handleCountryClick(feat);
+        return;
+      }
+      // Fallback to point territory
+      const pt = territoryPoints.find((p) => p.iso2 === iso2);
+      if (pt) {
+        globeEl.current?.pointOfView({ lat: pt.lat, lng: pt.lng, altitude: 1.5 }, 800);
+        handlePointClick(pt);
+      }
+    }
+  }, [nameToIso2, idToFeature, territoryPoints, flyToFeature]);
 
   async function handleCountryClick(feat) {
     const iso2 = getIso2FromFeature(feat);
@@ -362,16 +343,29 @@ export default function GlobeView() {
 
   return (
     <div className="relative min-h-[calc(100vh-4rem)] bg-white">
-      {/* Search overlay (inline list under the input via CountrySearch) */}
+      {/* Search overlay */}
       <div className="pointer-events-none absolute top-4 left-0 right-0 md:right-[380px] z-50">
         <div className="flex justify-center">
-          <div className="pointer-events-auto w-[22rem] max-w-full rounded-2xl bg-white/90 p-3 shadow-md backdrop-blur">
-            <CountrySearch
-              countries={countriesForSearch}
-              onSelect={handlePick}
-              placeholder="Search for a country…"
+          <form
+            className="pointer-events-auto flex items-center gap-2 rounded-2xl bg-white/90 px-3 py-2 shadow-md backdrop-blur"
+            onSubmit={(e) => { e.preventDefault(); selectByName(query); }}
+          >
+            <input
+              type="text"
+              list="country-list"
+              inputMode="search"
+              placeholder="Search country…"
+              className="w-72 bg-transparent outline-none"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") selectByName(query); }}
+              aria-label="Search country by name"
             />
-          </div>
+            <button type="submit" className="rounded-xl border px-3 py-1 text-sm hover:bg-gray-50">Go</button>
+            <datalist id="country-list">
+              {countryNames.map((n, idx) => (<option key={`${idx}-${n}`} value={n} />))}
+            </datalist>
+          </form>
         </div>
       </div>
 
@@ -384,11 +378,11 @@ export default function GlobeView() {
             bumpImageUrl={EARTH_BUMP}
             backgroundImageUrl="https://unpkg.com/three-globe/example/img/night-sky.png"
             globeMaterial={new THREE.MeshPhongMaterial({
-              color: 0x3672b7,
-              transparent: false,
-              opacity: 1.0,
-              depthWrite: true,
-            })}
+                            color: 0x3672b7,      // adjust color
+                            transparent: false,
+                            opacity: 1.0,
+                            depthWrite: true,
+                          })}
             rendererConfig={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
             width={undefined}
             height={undefined}
@@ -399,7 +393,7 @@ export default function GlobeView() {
             showAtmosphere={false}
             polygonAltitude={polyAltitude}
             polygonCapColor={polyCapColor}
-            polygonSideColor={() => "rgba(0,0,0,0.25)"}
+            polygonSideColor={() => "rgba(0,0,0,0.25)"}  // slightly cheaper
             polygonStrokeColor={polyStrokeColor}
             polygonStrokeWidth={0.2}
             onPolygonHover={onHover}
@@ -411,7 +405,7 @@ export default function GlobeView() {
             pointAltitude={() => 0.02}
             pointRadius={() => 0.12}
             pointLabel={(p) => `${p.name} (${p.iso2})`}
-            pointColor={() => "rgb(182, 152, 98)"}
+            pointColor={() => "rgb(182, 152, 98)"} // gold-ish like hovered caps
             onPointClick={handlePointClick}
           />
         </div>
@@ -453,22 +447,7 @@ export default function GlobeView() {
 
                   {active.missionaries.map((m, idx) => {
                     const email = extractEmail(m);
-                    const website = (() => {
-                      const candidates = [
-                        m?.website, m?.site, m?.url, m?.homepage, m?.home_page, m?.web,
-                        m?.organization_website, m?.org?.website, m?.profile?.website,
-                        ...(Array.isArray(m?.links) ? m.links : []),
-                        ...(Array.isArray(m?.websites) ? m.websites : []),
-                      ];
-                      for (const v of candidates) {
-                        if (!v) continue;
-                        const s = typeof v === "string" ? v : (v?.url || v?.href || v?.link);
-                        if (!s) continue;
-                        const u = cleanUrl(s);
-                        try { if (u && new URL(u).hostname) return u; } catch {}
-                      }
-                      return null;
-                    })();
+                    const website = extractWebsite(m);
                     return (
                       <div key={idx} style={{ padding: 8, border: "1px solid var(--border)", borderRadius: "8px" }}>
                         <div style={{ fontWeight: 600 }}>
@@ -619,3 +598,21 @@ export default function GlobeView() {
     });
   }
 }
+
+  function extractWebsite(m) {
+    const candidates = [
+      m?.website, m?.site, m?.url, m?.homepage, m?.home_page, m?.web,
+      m?.organization_website, m?.org?.website, m?.profile?.website,
+      ...(Array.isArray(m?.links) ? m.links : []),
+      ...(Array.isArray(m?.websites) ? m.websites : []),
+    ];
+    for (const v of candidates) {
+      if (!v) continue;
+      const u = cleanUrl(typeof v === "string" ? v : (v?.url || v?.href || v?.link));
+      try {
+        if (u && new URL(u).hostname) return u;
+      } catch { /* ignore */ }
+    }
+    return null;
+  }
+
