@@ -9,6 +9,7 @@ export default function SignUp() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -17,8 +18,14 @@ export default function SignUp() {
     setError(null);
     setLoading(true);
     try {
+      // Now passing accessCode as 4th arg
       // signupRequest() hits /api/auth/register, then logs in (returns { token, user })
-      const { token, user } = await signupRequest(name.trim(), email.trim(), password);
+      const { token, user } = await signupRequest(
+        name.trim(),
+        email.trim(),
+        password,
+        accessCode.trim()
+      );
       login(token, user);            // persist token + user
       navigate("/dashboard");        // adjust path if yours differs
     } catch (err) {
@@ -29,6 +36,10 @@ export default function SignUp() {
         if (j?.message) msg = j.message;
         if (j?.error) msg = `${j.error}${j.message ? `: ${j.message}` : ""}`;
       } catch {}
+      // Helpful mapping for common case:
+      if (/access code/i.test(msg) || (err?.status === 403)) {
+        msg = "Invalid access code";
+      }
       setError(msg);
     } finally {
       setLoading(false);
@@ -75,6 +86,19 @@ export default function SignUp() {
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+
+        <div className="form-row">
+          <label htmlFor="accessCode">Access Code</label>
+          <input
+            id="accessCode"
+            name="accessCode"
+            type="text"
+            value={accessCode}
+            onChange={(e) => setAccessCode(e.target.value)}
+            placeholder="Enter your access code"
             required
           />
         </div>

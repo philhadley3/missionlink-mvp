@@ -68,18 +68,45 @@ def _ensure_country(alpha2: str):
 @api_bp.route('/auth/register', methods=['POST'])
 def register():
     data = request.get_json() or {}
+
+    # --- Access code enforcement --------------------------------------------
+    supplied_code = (data.get('access_code') or '').strip()
+    required_code = (current_app.config.get('ACCESS_CODE') or '').strip()
+
+    # If ACCESS_CODE isn't configured, we still respond clearly (init enforces in prod).
+    if not required_code:
+        return jsonify({'error': 'signup_unavailable', 'message': 'access code not configured'}), 503
+
+    if not supplied_code:
+        return jsonify({'error': 'access_code required'}), 400
+
+    if supplied_code != required_code:
+        return jsonify({'error': 'invalid access code'}), 403
+
+    # --- Normal registration flow -------------------------------------------
     email = (data.get('email') or '').strip().lower()
     password = (data.get('password') or '').strip()
     role = (data.get('role') or 'missionary').strip()
+
     if not email or not password:
         return jsonify({'error': 'email and password required'}), 400
     if User.query.filter_by(email=email).first():
         return jsonify({'error': 'email already registered'}), 400
-    u = User(email=email, role=role); u.set_password(password)
+
+    u = User(email=email, role=role)
+    u.set_password(password)
     db.session.add(u); db.session.commit()
+
     if role == 'missionary':
-        m = Missionary(user_id=u.id, display_name=email.split('@')[0], organization='', bio='', website='')
+        m = Missionary(
+            user_id=u.id,
+            display_name=email.split('@')[0],
+            organization='',
+            bio='',
+            website=''
+        )
         db.session.add(m); db.session.commit()
+
     return jsonify({'message': 'registered'}), 201
 
 @api_bp.route('/auth/login', methods=['POST'])

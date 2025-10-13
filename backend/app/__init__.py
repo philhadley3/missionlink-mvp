@@ -32,6 +32,12 @@ def create_app():
         raise RuntimeError("JWT secret is required in production (set JWT_SECRET_KEY or JWT_SECRET)")
     app.config["JWT_SECRET_KEY"] = jwt_secret or "dev-only-change-me"
 
+    # --- Access Code (env-driven) --------------------------------------------
+    # Require ACCESS_CODE in production; provide a dev default locally.
+    if flask_env == "production" and not os.getenv("ACCESS_CODE"):
+        raise RuntimeError("ACCESS_CODE is required in production")
+    app.config["ACCESS_CODE"] = os.getenv("ACCESS_CODE", "MISSION2025")
+
     # Database
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///missionlink.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
