@@ -99,8 +99,14 @@ export default function SignUp() {
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value)}
             placeholder="Enter your access code"
+            aria-describedby="accessCodeHelp"
             required
           />
+          <div id="accessCodeHelp" style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>
+            Don’t have a code? Request one at{" "}
+            <a href="mailto:contact@anchorsforlife.org">contact@anchorsforlife.org</a>
+            .
+          </div>
         </div>
 
         {error && <div style={{ color: "salmon", marginTop: 8 }}>{error}</div>}
