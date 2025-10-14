@@ -403,9 +403,9 @@ export default function GlobeView() {
             pointLat={(p) => p.lat}
             pointLng={(p) => p.lng}
             pointAltitude={() => 0.02}
-            pointRadius={() => 0.12}
+            pointRadius={() => 100}
             pointLabel={(p) => `${p.name} (${p.iso2})`}
-            pointColor={() => "rgb(182, 152, 98)"} // gold-ish like hovered caps
+            pointColor={() => "rgb(0, 0, 0)"} // gold-ish like hovered caps
             onPointClick={handlePointClick}
           />
         </div>

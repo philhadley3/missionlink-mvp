@@ -15,6 +15,8 @@ countriesLib.registerLocale(enLocale);
 
 const AFL_STROKE = "#808080";
 const EARTH_BUMP = "https://unpkg.com/three-globe/example/img/earth-topology.png";
+const POLY_BASE = "rgba(227,221,211,1)";
+const POLY_HOVER = "rgb(182, 152, 98)";
 
 // Common alternate names / aliases keyed by ISO2
 const ALT_NAME_MAP = {
@@ -68,6 +70,7 @@ export default function GlobeView() {
 
   const [active, setActive] = useState(null);
   const [hovered, setHovered] = useState(null);
+  const [hoveredPoint, setHoveredPoint] = useState(null);
   const [activeId, setActiveId] = useState(null);
   const [activeCountryName, setActiveCountryName] = useState("");
 
@@ -269,10 +272,12 @@ export default function GlobeView() {
     (d) => (d?.id === hoveredId || d?.id === activeId ? 0.03 : 0.01),
     [hoveredId, activeId]
   );
+  
   const polyCapColor = useCallback(
-    (d) => (d?.id === hoveredId || d?.id === activeId ? "rgb(182, 152, 98)" : "rgba(227,221,211,1)"),
+    (d) => (d?.id === hoveredId || d?.id === activeId ? POLY_HOVER : POLY_BASE),
     [hoveredId, activeId]
   );
+
   const polyStrokeColor = useCallback(
     (d) => (d?.id === hoveredId || d?.id === activeId ? AFL_STROKE : "#000000"),
     [hoveredId, activeId]
@@ -408,11 +413,14 @@ export default function GlobeView() {
             pointsData={territoryPoints}
             pointLat={(p) => p.lat}
             pointLng={(p) => p.lng}
-            pointAltitude={() => 0.02}
-            pointRadius={() => 0.12}
+            pointAltitude={(p) => (hoveredPoint === p ? 0.013 : 0.01)}   // subtle lift on hover; keep your base small
+            pointRadius={() => 0.2}
             pointLabel={(p) => `${p.name} (${p.iso2})`}
-            pointColor={() => "rgb(182, 152, 98)"}
+            // Match polygon colors on hover/base
+            pointColor={(p) => (hoveredPoint === p ? POLY_HOVER : POLY_BASE)}
+            onPointHover={setHoveredPoint}                                // <-- correct prop name
             onPointClick={handlePointClick}
+
           />
         </div>
       </div>
