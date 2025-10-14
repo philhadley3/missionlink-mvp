@@ -69,11 +69,11 @@ def _ensure_country(alpha2: str):
 def register():
     from flask import request, jsonify, current_app
     import os, hmac
-    from .models import db, User, Missionary  # adjust import path if different
+    from .models import db, User, Missionary  # adjust import path if needed
 
     data = request.get_json() or {}
 
-    # --- Optional access-code gate (backend is source of truth) ---
+    # --- Optional access-code gate ---
     required_flag = os.getenv("ACCESS_CODE_REQUIRED", "false").lower() == "true"
     required_code = (os.getenv("SIGNUP_ACCESS_CODE") or "").strip()
     supplied_code = (data.get("access_code") or "").strip()
@@ -83,11 +83,10 @@ def register():
             return jsonify({"error": "access_code required"}), 400
         if not (required_code and hmac.compare_digest(supplied_code, required_code)):
             return jsonify({"error": "invalid access code"}), 403
-    # --------------------------------------------------------------
+    # ---------------------------------
 
     email = (data.get("email") or "").strip().lower()
     password = data.get("password")
-    role = data.get("role", "missionary")
 
     if not email or not password:
         return jsonify({"error": "email and password required"}), 400
@@ -95,17 +94,18 @@ def register():
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "email already registered"}), 400
 
-    user = User(email=email, role=role)
+    user = User(email=email, role="missionary")
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
 
-    if role == "missionary":
-        missionary = Missionary(id=user.id, display_name=email.split("@")[0])
-        db.session.add(missionary)
-        db.session.commit()
+    # ✅ FIXED: missionary.user_id = user.id
+    missionary = Missionary(user_id=user.id, display_name=email.split("@")[0])
+    db.session.add(missionary)
+    db.session.commit()
 
     return jsonify({"message": "registered"}), 201
+
 
 
 @api_bp.route('/auth/login', methods=['POST'])
