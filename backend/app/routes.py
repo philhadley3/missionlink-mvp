@@ -39,7 +39,7 @@ def _ensure_country(alpha2: str):
     if row:
         return row
 
-    # Best-effort create from pycountry (should be rare since we seed 249 rows)
+    # Best-effort create from pycountry (should be rare since you seeded 249 rows)
     pc = pycountry.countries.get(alpha_2=alpha2)
     if not pc:
         # fallback minimal
@@ -68,42 +68,18 @@ def _ensure_country(alpha2: str):
 @api_bp.route('/auth/register', methods=['POST'])
 def register():
     data = request.get_json() or {}
-
-    # --- Access code enforcement --------------------------------------------
-    supplied_code = (data.get('access_code') or '').strip()
-    required_code = (current_app.config.get('ACCESS_CODE') or '').strip()
-
-    if not required_code:
-        return jsonify({'error': 'signup_unavailable', 'message': 'access code not configured'}), 503
-    if not supplied_code:
-        return jsonify({'error': 'access_code required'}), 400
-    if supplied_code != required_code:
-        return jsonify({'error': 'invalid access code'}), 403
-
-    # --- Normal registration flow -------------------------------------------
     email = (data.get('email') or '').strip().lower()
     password = (data.get('password') or '').strip()
     role = (data.get('role') or 'missionary').strip()
-
     if not email or not password:
         return jsonify({'error': 'email and password required'}), 400
     if User.query.filter_by(email=email).first():
         return jsonify({'error': 'email already registered'}), 400
-
-    u = User(email=email, role=role)
-    u.set_password(password)
+    u = User(email=email, role=role); u.set_password(password)
     db.session.add(u); db.session.commit()
-
     if role == 'missionary':
-        m = Missionary(
-            user_id=u.id,
-            display_name=email.split('@')[0],
-            organization='',
-            bio='',
-            website=''
-        )
+        m = Missionary(user_id=u.id, display_name=email.split('@')[0], organization='', bio='', website='')
         db.session.add(m); db.session.commit()
-
     return jsonify({'message': 'registered'}), 201
 
 @api_bp.route('/auth/login', methods=['POST'])
@@ -120,25 +96,9 @@ def login():
 # ---------- countries ----------
 @api_bp.route('/countries', methods=['GET'])
 def list_countries():
-    rows = Country.query.order_by(Country.name).all()
-    out = []
-    for c in rows:
-        # Prefer model serializer
-        d = c.to_dict() if hasattr(c, "to_dict") else {
-            "id": getattr(c, "id", None),
-            "name": getattr(c, "name", None),
-            "official_name": getattr(c, "official_name", None),
-            "alpha2": getattr(c, "alpha2", None),
-            "alpha3": getattr(c, "alpha3", None),
-            "numeric": getattr(c, "numeric", None),
-            "flag_emoji": getattr(c, "flag_emoji", None),
-        }
-        # Frontend compatibility aliases (don’t overwrite if already present)
-        d.setdefault("iso2", d.get("alpha2"))
-        d.setdefault("iso3", d.get("alpha3"))
-        d.setdefault("flag", d.get("flag_emoji"))
-        out.append(d)
-    return jsonify(out)
+    countries = Country.query.order_by(Country.name).all()
+    # Use model's to_dict() so fields match your Country model
+    return jsonify([c.to_dict() for c in countries])
 
 @api_bp.route('/countries/all', methods=['GET'])
 def list_all_iso_countries():
@@ -158,6 +118,7 @@ def missionaries_by_country(alpha2):
     if not c:
         return jsonify([])
 
+    # Find missionaries with an assignment for this alpha2
     assigns = Assignment.query.filter_by(country_alpha2=alpha2).all()
     out = []
     for a in assigns:
@@ -183,6 +144,7 @@ def reports_by_country(alpha2):
     if not c:
         return jsonify([])
 
+    # Reports by missionaries assigned to this country
     assigns = Assignment.query.filter_by(country_alpha2=alpha2).all()
     missionary_ids = [a.missionary_id for a in assigns if a.missionary_id]
     if not missionary_ids:
@@ -249,6 +211,7 @@ def upload_avatar():
     ext = f.filename.rsplit('.',1)[-1].lower() if '.' in f.filename else ''
     if ext not in allowed_ext: return jsonify({'error':'unsupported file type'}), 400
 
+    # --- use mounted upload dir + serve via /api/files ---
     filename = secure_filename(f'{u.id}_avatar.{ext}')
     upload_path = current_app.config.get("UPLOAD_FOLDER")
     os.makedirs(upload_path, exist_ok=True)
@@ -263,20 +226,22 @@ def upload_avatar():
 @jwt_required()
 def delete_me():
     """
-    Permanently delete the current user's account, missionary profile,
-    assignments, reports, report images, and uploaded files.
+    Permanently delete the current user's account (and missionary profile if present),
+    including assignments, reports, report images, and uploaded files.
     """
     user_id = get_jwt_identity()
     u = User.query.get(int(user_id))
     if not u:
         return jsonify({'error': 'user_not_found'}), 404
 
+    # Clean up missionary-owned data
     if getattr(u, 'missionary', None):
         m = u.missionary
 
         # Delete reports + files
         reps = Report.query.filter_by(missionary_id=m.id).all()
         for r in reps:
+            # attached doc
             if r.file_url:
                 try:
                     p = _fs_path_from_url(r.file_url)
@@ -284,6 +249,7 @@ def delete_me():
                         os.remove(p)
                 except Exception:
                     pass
+            # images
             for img in list(r.images):
                 try:
                     p = _fs_path_from_url(img.url)
@@ -306,8 +272,10 @@ def delete_me():
             except Exception:
                 pass
 
+        # Delete missionary row
         db.session.delete(m)
 
+    # Finally delete the user
     db.session.delete(u)
     db.session.commit()
     return jsonify({'message': 'account_deleted'})
@@ -338,6 +306,7 @@ def set_assignments():
     if not isinstance(iso_list, list):
         return jsonify({'error':'countries must be an array of ISO2 codes'}), 400
 
+    # Normalize & ensure countries exist
     wanted_alpha2 = []
     for raw in iso_list:
         alpha2 = _normalize_iso2(raw)
@@ -347,13 +316,16 @@ def set_assignments():
         if c:
             wanted_alpha2.append(alpha2)
 
+    # Current assignments
     current = Assignment.query.filter_by(missionary_id=u.missionary.id).all()
     current_by_alpha2 = {a.country_alpha2: a for a in current if a.country_alpha2}
 
+    # Add missing
     for alpha2 in wanted_alpha2:
         if alpha2 not in current_by_alpha2:
             db.session.add(Assignment(missionary_id=u.missionary.id, country_alpha2=alpha2))
 
+    # Remove extra
     wanted_set = set(wanted_alpha2)
     for alpha2, a in current_by_alpha2.items():
         if alpha2 not in wanted_set:
@@ -384,14 +356,68 @@ def _fs_path_from_url(url: str) -> str | None:
     if token in url:
         name = url.split(token, 1)[1]
     else:
+        # legacy
         if "/uploads/" in url:
             name = url.split("/uploads/", 1)[1]
         else:
+            # bare filename as a last resort
             name = url.lstrip("/")
 
     if not name:
         return None
     return os.path.join(base, name)
+
+def _save_doc(file_obj, user_id):
+    allowed_mimes = {'application/pdf','text/plain','text/markdown','application/rtf'}
+    mime = (file_obj.mimetype or '').split(';')[0]
+    ext = (file_obj.filename.rsplit('.',1)[-1].lower() if '.' in (file_obj.filename or '') else '')
+    if (mime not in allowed_mimes) and (ext not in {'pdf','txt','md','rtf'}):
+        return None
+
+    safe_name = secure_filename(file_obj.filename or f'report_{uuid.uuid4().hex}')
+    # Generate a durable on-disk name; preserve original name separately
+    suffix = os.path.splitext(safe_name)[1] or ('.pdf' if mime == 'application/pdf' else '')
+    save_name = f"report_{user_id}_{uuid.uuid4().hex}{suffix}"
+
+    upload_path = _upload_dir()
+    os.makedirs(upload_path, exist_ok=True)
+    file_obj.save(os.path.join(upload_path, save_name))
+
+    file_url = _public_url(save_name)
+    if not mime:
+        mime = mimetypes.guess_type(save_name)[0] or 'application/octet-stream'
+    return (file_url, mime, file_obj.filename or safe_name)
+
+def _save_images(files, user_id, report_id):
+    out = []
+    upload_path = _upload_dir()
+    os.makedirs(upload_path, exist_ok=True)
+    for f in files or []:
+        if not f or f.filename == '':
+            continue
+        ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+        if ext not in {'jpg','jpeg','png','gif','webp'}:
+            continue
+        safe = secure_filename(f.filename)
+        # durable name
+        suffix = f".{ext}" if ext else ""
+        save_name = f"reportimg_{user_id}_{report_id}_{uuid.uuid4().hex}{suffix}"
+        file_path = os.path.join(upload_path, save_name)
+        f.save(file_path)
+        try:
+            with Image.open(file_path) as img:
+                img.verify()
+            with Image.open(file_path) as img2:
+                width, height = img2.size
+        except (UnidentifiedImageError, OSError):
+            try: os.remove(file_path)
+            except Exception: pass
+            continue
+        url = _public_url(save_name)
+        mime = mimetypes.guess_type(file_path)[0] or (f'image/{ext or "jpeg"}')
+        img_row = ReportImage(report_id=report_id, url=url, mime=mime, name=f.filename, width=width, height=height)
+        db.session.add(img_row); out.append(img_row)
+    return out
 
 # ---------- reports ----------
 @api_bp.route('/me/reports', methods=['POST'])
@@ -404,7 +430,7 @@ def create_report():
 
     is_multipart = request.content_type and 'multipart/form-data' in request.content_type
     if is_multipart:
-        country_alpha2 = _normalize_iso2(request.form.get('country_iso2'))
+        country_alpha2 = _normalize_iso2(request.form.get('country_iso2'))  # keep param name but normalize to alpha2
         title = request.form.get('title') or 'Update'
         content = request.form.get('content') or ''
         doc_file = request.files.get('file')
@@ -417,6 +443,7 @@ def create_report():
         doc_file = None
         image_files = []
 
+    # ENFORCE: only allowed to report for assigned countries
     assigned_alpha2 = [a.country_alpha2 for a in Assignment.query.filter_by(missionary_id=u.missionary.id).all()]
     if country_alpha2 not in assigned_alpha2:
         return jsonify({'error': 'not_assigned_to_country'}), 403
@@ -432,6 +459,7 @@ def create_report():
             return jsonify({'error': 'unsupported file type'}), 400
         file_url, file_mime, file_name = saved
 
+    # Note: Report model has no country_id; it's linked via missionary assignment context
     r = Report(missionary_id=u.missionary.id,
                title=title, content=content,
                file_url=file_url, file_mime=file_mime, file_name=file_name)
@@ -470,6 +498,7 @@ def delete_my_report(rid):
     if r.missionary_id != u.missionary.id:
         return jsonify({'error':'forbidden'}), 403
 
+    # delete attached doc
     if r.file_url:
         try:
             p = _fs_path_from_url(r.file_url)
@@ -478,6 +507,7 @@ def delete_my_report(rid):
         except Exception:
             pass
 
+    # delete attached images
     for img in r.images:
         try:
             p = _fs_path_from_url(img.url)

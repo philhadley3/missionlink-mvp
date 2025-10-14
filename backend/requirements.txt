@@ -2,20 +2,8 @@ flask==3.0.3
 flask_sqlalchemy==3.1.1
 flask-cors==4.0.1
 flask-jwt-extended==4.6.0
-Flask-Migrate==4.0.7
-alembic==1.13.2
-
 werkzeug==3.0.3
 gunicorn==22.0.0
-
-# DB driver (psycopg3, binary wheels)
 psycopg[binary]==3.2.10
-
-# Other libs
 Pillow==10.4.0
-
-# Upgrade to a newer pycountry to avoid the pkg_resources deprecation warning
-pycountry==24.6.1
-
-# Optional but nice to have for local .env
-python-dotenv==1.0.1
+pycountry==22.3.5

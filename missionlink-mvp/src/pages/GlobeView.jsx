@@ -386,7 +386,7 @@ export default function GlobeView() {
             globeMaterial={new THREE.MeshPhongMaterial({
               color: 0x3672b7,
               transparent: false,
-              opacity: 1.0,
+              opacity: 0.5,
               depthWrite: true,
             })}
             rendererConfig={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
