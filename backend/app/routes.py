@@ -65,22 +65,48 @@ def _ensure_country(alpha2: str):
     return row
 
 # ---------- auth ----------
-@api_bp.route('/auth/register', methods=['POST'])
+@api_bp.route("/auth/register", methods=["POST"])
 def register():
+    from flask import request, jsonify, current_app
+    import os, hmac
+    from .models import db, User, Missionary  # adjust import path if different
+
     data = request.get_json() or {}
-    email = (data.get('email') or '').strip().lower()
-    password = (data.get('password') or '').strip()
-    role = (data.get('role') or 'missionary').strip()
+
+    # --- Optional access-code gate (backend is source of truth) ---
+    required_flag = os.getenv("ACCESS_CODE_REQUIRED", "false").lower() == "true"
+    required_code = (os.getenv("SIGNUP_ACCESS_CODE") or "").strip()
+    supplied_code = (data.get("access_code") or "").strip()
+
+    if required_flag:
+        if not supplied_code:
+            return jsonify({"error": "access_code required"}), 400
+        if not (required_code and hmac.compare_digest(supplied_code, required_code)):
+            return jsonify({"error": "invalid access code"}), 403
+    # --------------------------------------------------------------
+
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password")
+    role = data.get("role", "missionary")
+
     if not email or not password:
-        return jsonify({'error': 'email and password required'}), 400
+        return jsonify({"error": "email and password required"}), 400
+
     if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'email already registered'}), 400
-    u = User(email=email, role=role); u.set_password(password)
-    db.session.add(u); db.session.commit()
-    if role == 'missionary':
-        m = Missionary(user_id=u.id, display_name=email.split('@')[0], organization='', bio='', website='')
-        db.session.add(m); db.session.commit()
-    return jsonify({'message': 'registered'}), 201
+        return jsonify({"error": "email already registered"}), 400
+
+    user = User(email=email, role=role)
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+
+    if role == "missionary":
+        missionary = Missionary(id=user.id, display_name=email.split("@")[0])
+        db.session.add(missionary)
+        db.session.commit()
+
+    return jsonify({"message": "registered"}), 201
+
 
 @api_bp.route('/auth/login', methods=['POST'])
 def login():
