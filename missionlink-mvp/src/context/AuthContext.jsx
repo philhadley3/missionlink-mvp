@@ -12,12 +12,13 @@ export function AuthProvider({ children }) {
     const u = localStorage.getItem("user");
     if (t) setToken(t);
     if (u) {
-      try { setUser(JSON.parse(u)); } catch {}
+      try {
+        setUser(JSON.parse(u));
+      } catch {}
     }
   }, []);
 
   async function loginRequest(email, password) {
-    // Hits /api/auth/login (helper handles base + headers)
     const data = await api("/api/auth/login", {
       method: "POST",
       body: { email, password },
@@ -27,14 +28,16 @@ export function AuthProvider({ children }) {
     return { token: jwt, user: { role: data?.role, email } };
   }
 
-  async function signupRequest(name, email, password) {
-    // Hits /api/auth/register
+  // ✅ UPDATED SIGNUP FUNCTION WITH ACCESS CODE SUPPORT
+  async function signupRequest(email, password, accessCode) {
+    // Hits /api/auth/register and includes access_code
     await api("/api/auth/register", {
       method: "POST",
-      body: { name, email, password },
+      body: { email, password, access_code: accessCode?.trim() },
       credentials: "include",
     });
-    // Immediately log them in
+
+    // Automatically log in after successful signup
     return loginRequest(email, password);
   }
 
@@ -53,7 +56,9 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, loginRequest, signupRequest }}>
+    <AuthContext.Provider
+      value={{ user, token, login, logout, loginRequest, signupRequest }}
+    >
       {children}
     </AuthContext.Provider>
   );

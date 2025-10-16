@@ -58,6 +58,103 @@ const ALT_NAME_MAP = {
 export default function GlobeView() {
   const globeEl = useRef();
   const { token } = useAuth();
+  
+// Kill any default tooltip chrome (covers classed + classless inline cases)
+useEffect(() => {
+  // 1) CSS overrides for known classes and generic fallbacks
+  const style = document.createElement("style");
+  style.innerHTML = `
+    .globe-tooltip, .three-globe-tooltip, .scene-tooltip, .tooltip {
+      background: transparent !important;
+      padding: 0 !important;
+      border: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      opacity: 1 !important;
+      pointer-events: none !important;
+      filter: none !important;
+      backdrop-filter: none !important;
+    }
+    .globe-tooltip *, .three-globe-tooltip *, .scene-tooltip *, .tooltip * {
+      background: transparent !important;
+      box-shadow: none !important;
+      border: none !important;
+      outline: none !important;
+      filter: none !important;
+      backdrop-filter: none !important;
+    }
+    .globe-tooltip::before, .globe-tooltip::after,
+    .three-globe-tooltip::before, .three-globe-tooltip::after,
+    .scene-tooltip::before, .scene-tooltip::after,
+    .tooltip::before, .tooltip::after {
+      display: none !important;
+    }
+    /* Catch the classless inline-style tooltip container */
+    div[style*="position: absolute"][style*="pointer-events: none"] {
+      background: transparent !important;
+      padding: 0 !important;
+      border: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      filter: none !important;
+      backdrop-filter: none !important;
+    }
+    /* Catch explicit inline drop-shadows or black backgrounds */
+    [style*="drop-shadow"], [style*="box-shadow"], [style*="outline"] {
+      filter: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+    }
+    div[style*="background: rgba(0,0,0"], div[style*="background:rgba(0,0,0"] {
+      background: transparent !important;
+    }
+  `;
+  document.head.appendChild(style);
+
+  // 2) JS sweep — force-clear inline styles on present & future nodes
+  const fix = (el) => {
+    if (!(el instanceof HTMLElement)) return;
+    el.style.background = "transparent";
+    el.style.padding = "0px";
+    el.style.border = "none";
+    el.style.boxShadow = "none";
+    el.style.outline = "none";
+    el.style.opacity = "1";
+    el.style.pointerEvents = "none";
+    el.style.filter = "none";
+    el.style.backdropFilter = "none";
+  };
+
+  const selectors = [".globe-tooltip", ".three-globe-tooltip", ".scene-tooltip", ".tooltip"];
+  const sweep = () => {
+    selectors.forEach((s) => document.querySelectorAll(s).forEach(fix));
+    // classless, inline-styled containers commonly used by three-render-objects
+    document
+      .querySelectorAll('div[style*="position: absolute"][style*="pointer-events: none"]')
+      .forEach(fix);
+  };
+
+  sweep();
+
+  const mo = new MutationObserver(() => sweep());
+  mo.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["class", "style"]
+  });
+
+  // Fallback: a short pulse to catch late inits
+  const pulse = setInterval(sweep, 500);
+  setTimeout(() => clearInterval(pulse), 3000);
+
+  return () => {
+    mo.disconnect();
+    clearInterval(pulse);
+    document.head.removeChild(style);
+  };
+}, []);
+
 
   // Polygons (110m for perf)
   const [allPolygons, setAllPolygons] = useState([]);
@@ -173,6 +270,8 @@ export default function GlobeView() {
     }),
     []
   );
+
+
 
   useEffect(() => {
     if (!allPolygons.length) return;
@@ -407,6 +506,16 @@ export default function GlobeView() {
             polygonSideColor={() => "rgba(0,0,0,0.25)"}
             polygonStrokeColor={polyStrokeColor}
             polygonStrokeWidth={0.2}
+            polygonLabel={(d) => {
+              const iso2 = getIso2FromFeature(d);
+              const name = iso2 ? (countriesLib.getName(iso2, "en") || iso2) : "Unknown";
+              return `
+                <div style="padding:6px 6px; background:rgba(227,221,211,1); color:rgba(54,115,183,1);
+                            border-radius:7px; font-size:12px; display:inline-block;">
+                  ${name}${iso2 ? ` (${iso2})` : ""}
+                </div>
+              `;
+            }}
             onPolygonHover={onHover}
             onPolygonClick={handlePolygonClick}
             // ---- POINT LAYER for territories ----
@@ -415,7 +524,12 @@ export default function GlobeView() {
             pointLng={(p) => p.lng}
             pointAltitude={(p) => (hoveredPoint === p ? 0.013 : 0.01)}   // subtle lift on hover; keep your base small
             pointRadius={() => 0.2}
-            pointLabel={(p) => `${p.name} (${p.iso2})`}
+            pointLabel={(p) => `
+              <div style="padding:6px 6px; background:rgba(227,221,211,1); color:rgba(54,115,183,1);
+                          border-radius:7px; font-size:12px; display:inline-block;">
+                ${p.name}${p.iso2 ? ` (${p.iso2})` : ""}
+              </div>
+            `}
             // Match polygon colors on hover/base
             pointColor={(p) => (hoveredPoint === p ? POLY_HOVER : POLY_BASE)}
             onPointHover={setHoveredPoint}                                // <-- correct prop name

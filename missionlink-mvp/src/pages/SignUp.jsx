@@ -16,28 +16,38 @@ export default function SignUp() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+
+    // ✅ Client-side validation: access code required
+    if (!accessCode.trim()) {
+      setError("Access code is required");
+      return;
+    }
+
+    if (!email.trim() || !password.trim()) {
+      setError("Email and password are required");
+      return;
+    }
+
     setLoading(true);
     try {
-      // Now passing accessCode as 4th arg
-      // signupRequest() hits /api/auth/register, then logs in (returns { token, user })
+      // ✅ signupRequest(email, password, accessCode)
       const { token, user } = await signupRequest(
-        name.trim(),
         email.trim(),
         password,
         accessCode.trim()
       );
-      login(token, user);            // persist token + user
-      navigate("/dashboard");        // adjust path if yours differs
+
+      // Store user + token locally
+      login(token, { ...user, name });
+      navigate("/dashboard");
     } catch (err) {
-      // Prefer server-provided message if available
       let msg = err?.bodyText || err?.message || "Signup failed";
       try {
         const j = JSON.parse(msg);
         if (j?.message) msg = j.message;
         if (j?.error) msg = `${j.error}${j.message ? `: ${j.message}` : ""}`;
       } catch {}
-      // Helpful mapping for common case:
-      if (/access code/i.test(msg) || (err?.status === 403)) {
+      if (/access code/i.test(msg) || err?.status === 403) {
         msg = "Invalid access code";
       }
       setError(msg);
@@ -60,6 +70,7 @@ export default function SignUp() {
             autoComplete="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            placeholder="Your full name"
             required
           />
         </div>
@@ -102,9 +113,14 @@ export default function SignUp() {
             aria-describedby="accessCodeHelp"
             required
           />
-          <div id="accessCodeHelp" style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>
+          <div
+            id="accessCodeHelp"
+            style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}
+          >
             Don’t have a code? Request one at{" "}
-            <a href="mailto:contact@anchorsforlife.org">contact@anchorsforlife.org</a>
+            <a href="mailto:contact@anchorsforlife.org">
+              contact@anchorsforlife.org
+            </a>
             .
           </div>
         </div>
